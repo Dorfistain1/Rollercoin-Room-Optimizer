@@ -92,6 +92,7 @@ The pipeline runs automatically:
 
 Final swap visualizations are written to `output/swaps_room*.png` (one file per room). Open the `output/` folder to view the rendered swap plans after the pipeline completes.
 
+---
 
 ## Output
 
