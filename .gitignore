@@ -1,0 +1,21 @@
+# user data
+miners/*
+miners/!.gitkeep
+
+html_page/*
+html_page/!.gitkeep
+
+output/*
+output/!.gitkeep
+
+vis/*
+vis/!.gitkeep
+
+# full miner list from minaryganar.com
+/fullminerlist - legacy/
+
+__pycache__/
+
+# jsons
+data/*
+data/!.gitkeep
