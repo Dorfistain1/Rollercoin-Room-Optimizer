@@ -20,7 +20,7 @@ Scrapes your [RollerCoin](https://rollercoin.com/?r=kyaf3h0b) rooms from saved H
 pip install -r requirements.txt
 ```
 
-Run everything from the `roomBuilder/` directory.
+Run everything from the `root/` directory.
 
 ---
 
@@ -122,7 +122,7 @@ After showing the current state the optimizer asks for the actual total bonus % 
 
 ## Running scripts individually
 
-All scripts live in `app/` and are run from the `roomBuilder/` directory.
+All scripts live in `app/` and are run from the `root/` directory.
 
 ### parse_room.py
 
