@@ -88,8 +88,6 @@ The pipeline runs automatically:
 | 12 | Renders swap plan → `output/swaps_room*.png` |
 | 13 | Cleans up `_files/` folders left by the browser in `html_page/` |
 
----
-
 Final swap visualizations are written to `output/swaps_room*.png` (one file per room). Open the `output/` folder to view the rendered swap plans after the pipeline completes.
 
 ---
