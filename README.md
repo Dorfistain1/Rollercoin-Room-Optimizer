@@ -28,7 +28,7 @@ Run everything from the `root/` directory.
 
 ### 1 — Save your room pages from the browser
 
-1. Open your RollerCoin room in edit view in Chrome.
+1. Open your RollerCoin room in edit view in Chrome. (The page that looks like this: ![Room page preview](docs/room_edit_view.png))
 2. Press `Ctrl+S` (or `Cmd+S` on Mac) to save the page as HTML. Save the file directly into the `html_page/` folder.
 3. Repeat for each room.
 
