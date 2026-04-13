@@ -15,14 +15,33 @@ Scrapes your [RollerCoin](https://rollercoin.com/?r=kyaf3h0b) rooms from saved H
 | `app/refetch_missing.py` | Re-fetches miners whose power/bonus data is missing. |
 
 ## Setup
+Clone this repository (HTTPS):
+
+```bash
+git clone https://github.com/Dorfistain1/Rollercoin-Room-Optimizer.git
+cd Rollercoin-Room-Optimizer
+```
+
+Or clone with SSH (if you have SSH keys set up):
+
+```bash
+git clone git@github.com:Dorfistain1/Rollercoin-Room-Optimizer.git
+cd Rollercoin-Room-Optimizer
+```
+
+Download as ZIP from GitHub (via browser): open the repo page and choose **Code → Download ZIP**, or via command line:
+
+```bash
+curl -L -o repo.zip https://github.com/Dorfistain1/Rollercoin-Room-Optimizer/archive/refs/heads/main.zip
+unzip repo.zip
+```
+
+After cloning/opening the folder, install dependencies:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-Run everything from the `root/` directory.
-
----
 
 ## Quick start
 
