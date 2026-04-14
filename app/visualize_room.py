@@ -77,6 +77,7 @@ RARITY_BADGE: dict[str, str] = {
     "legendary": "legendary.png",
     "unreal":    "unreal.png",
     "set":       "set.png",
+    "legacy":    "legacy.png",
 }
 
 
@@ -332,6 +333,14 @@ def render(racks: list[list[dict]]) -> Image.Image:
                 _ml_entry = _get_match_log().get(miner["slug"], {})
                 power_th  = _ml_entry.get("manual_power_th")
                 bonus_pct = _ml_entry.get("manual_bonus_pct")
+            elif miner.get("rarity") == "legacy":
+                _ml_entry = _get_match_log().get(miner["slug"], {})
+                power_th  = _ml_entry.get("manual_power_th")
+                bonus_pct = _ml_entry.get("manual_bonus_pct")
+                if power_th is None and bonus_pct is None:
+                    power_th, bonus_pct = get_miner_stats(
+                        miner.get("name", ""), "legacy"
+                    )
             else:
                 power_th, bonus_pct = get_miner_stats(
                     miner.get("name", ""), miner.get("rarity")

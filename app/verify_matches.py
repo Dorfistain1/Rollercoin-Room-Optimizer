@@ -1,10 +1,14 @@
 """
-verify_matches.py — UI to verify that secondary-search miner matches are correct.
+verify_matches.py — UI to verify that secondary-search miner matches are correct,
+and to enter stats for legacy-rarity miners that are not available on minaryganar.com.
 
 When main.py fetches a missing miner and the name found on minaryganar.com
 differs from the name in the game HTML, it logs the pairing to match_log.json.
 This window lets the user confirm the match is correct, or reject it and supply
 manual power/bonus values.
+
+Legacy miners (badge alt="Rating star") cannot be fetched from minaryganar.com.
+They are queued here automatically so the user can enter their power and bonus.
 
 Rejected miners:
   - Show a placeholder image in the visualizer (with a red tint)
@@ -46,10 +50,108 @@ def _load_log() -> list[dict]:
 
 
 def _save_log(entries: list[dict]) -> None:
+    MATCH_LOG.parent.mkdir(parents=True, exist_ok=True)
     MATCH_LOG.write_text(
         json.dumps(entries, indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
+
+
+def _find_image_for_slug(slug: str) -> str:
+    """Return the image filename for *slug* from the miners directory, or a .gif placeholder."""
+    for ext in (".gif", ".png", ".jpg", ".webp"):
+        p = MINERS_DIR / (slug + ext)
+        if p.exists():
+            return p.name
+    # Case-insensitive scan
+    slug_lower = slug.lower()
+    for p in MINERS_DIR.iterdir():
+        if p.suffix.lower() in (".gif", ".png", ".jpg", ".webp"):
+            if p.stem.lower() == slug_lower:
+                return p.name
+    return slug + ".gif"  # fallback placeholder name
+
+
+def _collect_legacy_miners() -> None:
+    """
+    Scan all placed_room*.json files for miners with rarity 'legacy' and
+    add them to match_log.json (status 'legacy') if not already present.
+    Called once before opening the verify window so the user can fill in
+    power and bonus for miners the minaryganar.com site cannot provide.
+    """
+    entries = _load_log()
+    existing_slugs = {e["slug"] for e in entries}
+
+    placed_dir = _ROOT / "data"
+    added = 0
+    for placed_path in sorted(placed_dir.glob("placed_room*.json")):
+        try:
+            data = json.loads(placed_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        for rack in data.get("racks", []):
+            for miner in rack:
+                if miner.get("rarity") != "legacy":
+                    continue
+                slug = miner["slug"]
+                if slug in existing_slugs:
+                    continue
+                entries.append({
+                    "slug":       slug,
+                    "html_name":  miner.get("name", slug),
+                    "found_name": "",
+                    "image":      _find_image_for_slug(slug),
+                    "status":     "legacy",
+                })
+                existing_slugs.add(slug)
+                added += 1
+
+    if added:
+        _save_log(entries)
+        print(f"  Queued {added} legacy miner(s) for manual data entry.")
+
+
+def _add_legacy_db_record(entry: dict) -> None:
+    """Write (or update) a legacy miner's record in miners_data.json with manual stats."""
+    import re as _re
+
+    db_path = _ROOT / "miners/miners_data.json"
+
+    def _n(s: str) -> str:
+        s = s.lower().replace("'", "").replace("\u2019", "").replace("-", "_")
+        return _re.sub(r"[^\w]+", "_", s).strip("_")
+
+    data: list[dict] = []
+    if db_path.exists():
+        try:
+            data = json.loads(db_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
+    html_name = entry.get("html_name", "")
+    html_key  = _n(html_name)
+    p = entry.get("manual_power_th")
+    b = entry.get("manual_bonus_pct")
+    c = entry.get("manual_cells", 2)
+    image = entry.get("image", f"{entry.get('slug', '')}.gif")
+
+    existing = next((m for m in data if _n(m["name"]) == html_key), None)
+    if existing:
+        existing.setdefault("rarities", {})["legacy"] = {"power_th": p, "bonus_pct": b}
+        existing["_manual"] = True
+        if c:
+            existing["cells"] = c
+    else:
+        data.append({
+            "name":     html_name,
+            "image":    image,
+            "cells":    c,
+            "rarities": {"legacy": {"power_th": p, "bonus_pct": b}},
+            "_manual":  True,
+        })
+
+    db_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    print(f"  Legacy DB record saved for '{html_name}' ({c} cell, {p} TH, {b}%)")
 
 
 def _load_thumb(image_filename: str) -> ImageTk.PhotoImage | None:
@@ -104,8 +206,15 @@ class VerifyWindow:
             fg="white", bg="#2c3e50", font=("Arial", 13, "bold"),
         ).pack(side=tk.LEFT)
         pending = sum(1 for e in entries if e.get("status") == "pending")
+        legacy = sum(1 for e in entries if e.get("status") == "legacy")
+        parts = []
+        if pending:
+            parts.append(f"{pending} pending match{'es' if pending != 1 else ''}")
+        if legacy:
+            parts.append(f"{legacy} legacy miner{'s' if legacy != 1 else ''}")
+        status_str = ", ".join(parts) if parts else "all reviewed"
         tk.Label(
-            top, text=f"  {len(entries)} miner(s) to review  ({pending} still pending)",
+            top, text=f"  {len(entries)} miner(s) to review  ({status_str})",
             fg="#bdc3c7", bg="#2c3e50", font=("Arial", 10),
         ).pack(side=tk.LEFT)
         tk.Button(
@@ -157,7 +266,10 @@ class VerifyWindow:
 
     def _build_cards(self) -> None:
         for i, entry in enumerate(self.entries):
-            self._build_card(i, entry)
+            if entry.get("status") == "legacy":
+                self._build_legacy_card(i, entry)
+            else:
+                self._build_card(i, entry)
 
     def _build_card(self, idx: int, entry: dict) -> None:
         bg = "#ffffff" if idx % 2 == 0 else "#f7f7f7"
@@ -304,6 +416,68 @@ class VerifyWindow:
         # Initialise visibility
         _show_manual(entry.get("status") == "rejected")
 
+    # ── Legacy card ────────────────────────────────────────────────────────
+
+    def _build_legacy_card(self, idx: int, entry: dict) -> None:
+        """Build a card for a legacy-rarity miner that needs manual power/bonus entry."""
+        bg = "#fff8e6"  # warm amber background to distinguish from match cards
+
+        card = tk.Frame(
+            self.inner, bg=bg, bd=1, relief=tk.GROOVE,
+            padx=10, pady=8,
+        )
+        card.pack(fill=tk.X, padx=10, pady=4, ipady=2)
+        card.columnconfigure(2, weight=1)
+
+        # ── Thumbnail ──────────────────────────────────────────────────────
+        photo = _load_thumb(entry.get("image", ""))
+        self._photos.append(photo)
+        tk.Label(
+            card, bg=bg,
+            image=photo if photo else None,
+            text="" if photo else "[no image]",
+            fg="#999", width=THUMB_W if not photo else 0,
+        ).grid(row=0, column=0, rowspan=4, padx=(0, 14), sticky="nw")
+
+        # ── Header ─────────────────────────────────────────────────────────
+        tk.Label(
+            card, text="\u2b50 LEGACY MINER", fg="#b8780a", bg=bg,
+            font=("Arial", 9, "bold"),
+        ).grid(row=0, column=1, columnspan=2, sticky="w")
+        tk.Label(
+            card, text=entry.get("html_name", "?"),
+            font=("Arial", 10, "bold"), bg=bg, fg="#2c3e50",
+        ).grid(row=1, column=1, columnspan=2, sticky="w", pady=(1, 0))
+        tk.Label(
+            card,
+            text="Not available on minaryganar.com \u2014 enter power and bonus manually.",
+            fg="#888", bg=bg, font=("Arial", 8, "italic"),
+        ).grid(row=2, column=1, columnspan=2, sticky="w", pady=(0, 4))
+
+        # ── Input fields ───────────────────────────────────────────────────
+        pwr_var  = tk.StringVar(value=str(entry.get("manual_power_th") or ""))
+        bon_var  = tk.StringVar(value=str(entry.get("manual_bonus_pct") or ""))
+        cell_var = tk.StringVar(value=str(entry.get("manual_cells") or 2))
+        self._vars.append({
+            "status":    tk.StringVar(value="legacy"),
+            "power_th":  pwr_var,
+            "bonus_pct": bon_var,
+            "cells":     cell_var,
+        })
+
+        manual_row = tk.Frame(card, bg=bg)
+        manual_row.grid(row=3, column=1, columnspan=2, sticky="w")
+        tk.Label(manual_row, text="Power (TH):", bg=bg, font=("Arial", 8)).pack(side=tk.LEFT)
+        tk.Entry(manual_row, textvariable=pwr_var, width=12, font=("Arial", 9)).pack(
+            side=tk.LEFT, padx=(2, 10),
+        )
+        tk.Label(manual_row, text="Bonus (%):", bg=bg, font=("Arial", 8)).pack(side=tk.LEFT)
+        tk.Entry(manual_row, textvariable=bon_var, width=8, font=("Arial", 9)).pack(
+            side=tk.LEFT, padx=(2, 0),
+        )
+        tk.Label(manual_row, text="  Cells:", bg=bg, font=("Arial", 8)).pack(side=tk.LEFT)
+        tk.OptionMenu(manual_row, cell_var, "1", "2").pack(side=tk.LEFT, padx=(2, 0))
+
     # ── Persistence ───────────────────────────────────────────────────────
 
     def _finish(self) -> None:
@@ -326,6 +500,22 @@ class VerifyWindow:
                 except (ValueError, KeyError):
                     entry["manual_cells"] = 2
                 _replace_db_record(entry)
+            elif entry["status"] == "legacy":
+                try:
+                    pwr = float(v["power_th"].get().replace(",", ".") or "0")
+                    entry["manual_power_th"] = pwr if pwr > 0 else None
+                except ValueError:
+                    entry["manual_power_th"] = None
+                try:
+                    bon = float(v["bonus_pct"].get().replace(",", ".") or "0")
+                    entry["manual_bonus_pct"] = bon if bon > 0 else None
+                except ValueError:
+                    entry["manual_bonus_pct"] = None
+                try:
+                    entry["manual_cells"] = int(v["cells"].get())
+                except (ValueError, KeyError):
+                    entry["manual_cells"] = 2
+                _add_legacy_db_record(entry)
             else:
                 # Clear any stale manual overrides
                 entry.pop("manual_power_th", None)
@@ -335,8 +525,10 @@ class VerifyWindow:
         _save_log(self.entries)
         n_ok  = sum(1 for e in self.entries if e["status"] == "confirmed")
         n_rej = sum(1 for e in self.entries if e["status"] == "rejected")
+        n_leg = sum(1 for e in self.entries if e["status"] == "legacy")
         n_pnd = sum(1 for e in self.entries if e["status"] == "pending")
-        print(f"Match log saved: {n_ok} confirmed, {n_rej} rejected, {n_pnd} still pending")
+        print(f"Match log saved: {n_ok} confirmed, {n_rej} rejected, "
+              f"{n_leg} legacy, {n_pnd} still pending")
         self.root.destroy()
 
 
@@ -429,6 +621,7 @@ def _norm(s: str) -> str:
 
 
 def main() -> None:
+    _collect_legacy_miners()
     entries = _load_log()
     if not entries:
         print("No entries in match_log.json — nothing to verify.")

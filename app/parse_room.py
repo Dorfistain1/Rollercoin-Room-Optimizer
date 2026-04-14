@@ -199,11 +199,15 @@ def parse_placed_miners(soup: BeautifulSoup, slug_index: dict[str, dict]) -> lis
             if badge_div:
                 lvl_img = badge_div.find("img")
                 if lvl_img:
-                    try:
-                        idx = int(lvl_img.get("alt", "0"))
-                        rarity = RARITIES[idx] if 0 <= idx < len(RARITIES) else RARITIES[0]
-                    except ValueError:
-                        pass
+                    alt = lvl_img.get("alt", "0")
+                    if alt == "Rating star":
+                        rarity = "legacy"
+                    else:
+                        try:
+                            idx = int(alt)
+                            rarity = RARITIES[idx] if 0 <= idx < len(RARITIES) else RARITIES[0]
+                        except ValueError:
+                            pass
 
             # Slot size from size-N class on the badges div
             slot_size = 1

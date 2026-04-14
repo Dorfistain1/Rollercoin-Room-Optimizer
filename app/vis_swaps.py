@@ -82,6 +82,7 @@ _RARITY_ABBR: dict[str, str] = {
     "epic":      "E",
     "legendary": "L",
     "unreal":    "UR",
+    "legacy":    "LGC",
 }
 
 

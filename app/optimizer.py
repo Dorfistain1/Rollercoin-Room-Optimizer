@@ -135,8 +135,9 @@ def _prompt_set_bonus(raw_power: float, computed_bonus: float, current_offset_pc
         print(f"  Set-bonus offset : {current_offset_pct:>+10.2f} %")
         print(f"  Adjusted bonus   : {total_pct:>10.2f} %")
     print()
-    print("  Enter actual total bonus % shown in-game,")
-    print("  or press Enter to keep the current value:")
+    print("  Enter the TOTAL bonus % shown in-game (e.g. 1031.42).")
+    print("  This replaces the stored set-bonus offset — it does not add to it.")
+    print("  Press Enter to keep the current value:")
     raw = input("  > ").strip().replace(",", ".").replace(" ", "").rstrip("%")
     if not raw:
         return current_offset_pct

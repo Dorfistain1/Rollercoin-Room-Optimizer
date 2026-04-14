@@ -195,6 +195,5 @@ python app/select_locked.py
 
 ## Known limitations
 
-- Legacy miners cannot be distinguished from common — treated as common rarity.
-- Rack position bonuses are not taken into account.
-- Set bonuses are partially supported via manual entry; automatic detection is not implemented.
+- Rack bonuses are not taken into account.
+- Set bonuses are not supported, but miners can be locked in place to prevent them from being swapped out.

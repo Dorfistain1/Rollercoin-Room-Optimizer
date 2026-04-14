@@ -272,13 +272,14 @@ def main() -> None:
         render_one(placed_path)
 
     # ── Phase 9: verify miner matches ────────────────────────────────────
+    import verify_matches as _vm
+    _vm._collect_legacy_miners()   # queue any legacy-rarity miners for manual entry
     _log_path = Path(_MATCH_LOG_PATH)
     if _log_path.exists():
         import json as _json
         _log_entries = _json.loads(_log_path.read_text(encoding="utf-8"))
-        if any(e.get("status") == "pending" for e in _log_entries):
-            print("\n=== Phase 9: verifying miner name matches ===")
-            import verify_matches as _vm
+        if any(e.get("status") in ("pending", "legacy") for e in _log_entries):
+            print("\n=== Phase 9: verifying miner name matches & legacy data ===")
             _vm.main()
         else:
             print("\n=== Phase 9: no pending match verifications ===")
