@@ -111,6 +111,113 @@ def _collect_legacy_miners() -> None:
         print(f"  Queued {added} legacy miner(s) for manual data entry.")
 
 
+def _collect_missing_data_miners() -> None:
+    """
+    Scan all placed_room*.json files for miners whose power is missing or zero in
+    miners_data.json (fetch failed or data incomplete).  Adds them to match_log.json
+    with status 'missing_data' so the user can fill in values manually.
+    """
+    import re as _re
+
+    entries = _load_log()
+    existing_slugs = {e["slug"] for e in entries}
+
+    db_path = _ROOT / "miners/miners_data.json"
+    db: list[dict] = []
+    if db_path.exists():
+        try:
+            db = json.loads(db_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
+    def _n(s: str) -> str:
+        s = s.lower().replace("'", "").replace("\u2019", "").replace("-", "_")
+        return _re.sub(r"[^\w]+", "_", s).strip("_")
+
+    db_index = {_n(m["name"]): m for m in db}
+
+    placed_dir = _ROOT / "data"
+    added = 0
+    for placed_path in sorted(placed_dir.glob("placed_room*.json")):
+        try:
+            data = json.loads(placed_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        for rack in data.get("racks", []):
+            for miner in rack:
+                if miner.get("rarity") == "legacy":
+                    continue  # handled by _collect_legacy_miners
+                slug = miner.get("slug", "")
+                if slug in existing_slugs:
+                    continue
+                name   = miner.get("name", slug)
+                rarity = miner.get("rarity") or "common"
+                rec    = db_index.get(_n(name))
+                power  = None
+                if rec:
+                    tier  = (rec.get("rarities") or {}).get(rarity) or {}
+                    power = tier.get("power_th")
+                if power:
+                    continue  # DB has valid data — skip
+                entries.append({
+                    "slug":       slug,
+                    "html_name":  name,
+                    "found_name": rec["name"] if rec else "",
+                    "image":      _find_image_for_slug(slug),
+                    "rarity":     rarity,
+                    "status":     "missing_data",
+                })
+                existing_slugs.add(slug)
+                added += 1
+
+    if added:
+        _save_log(entries)
+        print(f"  Queued {added} miner(s) with missing DB data for manual entry.")
+
+
+def _add_missing_data_db_record(entry: dict) -> None:
+    """Write or update a miner's rarity entry in miners_data.json with manually supplied stats."""
+    import re as _re
+
+    db_path = _ROOT / "miners/miners_data.json"
+
+    def _n(s: str) -> str:
+        s = s.lower().replace("'", "").replace("\u2019", "").replace("-", "_")
+        return _re.sub(r"[^\w]+", "_", s).strip("_")
+
+    data: list[dict] = []
+    if db_path.exists():
+        try:
+            data = json.loads(db_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
+    html_name = entry.get("html_name", "")
+    rarity    = entry.get("rarity", "common")
+    p         = entry.get("manual_power_th")
+    b         = entry.get("manual_bonus_pct")
+    c         = entry.get("manual_cells", 2)
+    image     = entry.get("image", f"{entry.get('slug', '')}.gif")
+
+    existing = next((m for m in data if _n(m["name"]) == _n(html_name)), None)
+    if existing:
+        existing.setdefault("rarities", {})[rarity] = {"power_th": p, "bonus_pct": b}
+        existing["_manual"] = True
+        if c:
+            existing["cells"] = c
+    else:
+        data.append({
+            "name":     html_name,
+            "image":    image,
+            "cells":    c,
+            "rarities": {rarity: {"power_th": p, "bonus_pct": b}},
+            "_manual":  True,
+        })
+
+    db_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    print(f"  Missing-data DB record saved for '{html_name}' ({rarity}, {c} cell, {p} TH, {b}%)")
+
+
 def _add_legacy_db_record(entry: dict) -> None:
     """Write (or update) a legacy miner's record in miners_data.json with manual stats."""
     import re as _re
@@ -206,12 +313,15 @@ class VerifyWindow:
             fg="white", bg="#2c3e50", font=("Arial", 13, "bold"),
         ).pack(side=tk.LEFT)
         pending = sum(1 for e in entries if e.get("status") == "pending")
-        legacy = sum(1 for e in entries if e.get("status") == "legacy")
+        legacy  = sum(1 for e in entries if e.get("status") == "legacy")
+        missing = sum(1 for e in entries if e.get("status") == "missing_data")
         parts = []
         if pending:
             parts.append(f"{pending} pending match{'es' if pending != 1 else ''}")
         if legacy:
             parts.append(f"{legacy} legacy miner{'s' if legacy != 1 else ''}")
+        if missing:
+            parts.append(f"{missing} missing data")
         status_str = ", ".join(parts) if parts else "all reviewed"
         tk.Label(
             top, text=f"  {len(entries)} miner(s) to review  ({status_str})",
@@ -247,7 +357,8 @@ class VerifyWindow:
             "<Configure>",
             lambda e: self.canvas.itemconfig(self._win_id, width=e.width),
         )
-        self.canvas.bind(
+        # Bind mouse wheel to the whole window so scroll works anywhere
+        root.bind_all(
             "<MouseWheel>",
             lambda e: self.canvas.yview_scroll(-1 * (e.delta // 120), "units"),
         )
@@ -268,6 +379,8 @@ class VerifyWindow:
         for i, entry in enumerate(self.entries):
             if entry.get("status") == "legacy":
                 self._build_legacy_card(i, entry)
+            elif entry.get("status") == "missing_data":
+                self._build_missing_data_card(i, entry)
             else:
                 self._build_card(i, entry)
 
@@ -478,9 +591,91 @@ class VerifyWindow:
         tk.Label(manual_row, text="  Cells:", bg=bg, font=("Arial", 8)).pack(side=tk.LEFT)
         tk.OptionMenu(manual_row, cell_var, "1", "2").pack(side=tk.LEFT, padx=(2, 0))
 
+    # ── Missing-data card ─────────────────────────────────────────────────
+
+    def _build_missing_data_card(self, idx: int, entry: dict) -> None:
+        """Build a card for a miner whose DB data is missing or zero — user fills it in."""
+        bg = "#fde8e8"  # light red background
+
+        card = tk.Frame(
+            self.inner, bg=bg, bd=1, relief=tk.GROOVE,
+            padx=10, pady=8,
+        )
+        card.pack(fill=tk.X, padx=10, pady=4, ipady=2)
+        card.columnconfigure(2, weight=1)
+
+        # ── Thumbnail ──────────────────────────────────────────────────────
+        photo = _load_thumb(entry.get("image", ""))
+        self._photos.append(photo)
+        tk.Label(
+            card, bg=bg,
+            image=photo if photo else None,
+            text="" if photo else "[no image]",
+            fg="#999", width=THUMB_W if not photo else 0,
+        ).grid(row=0, column=0, rowspan=4, padx=(0, 14), sticky="nw")
+
+        # ── Header ─────────────────────────────────────────────────────────
+        rarity = entry.get("rarity", "common")
+        tk.Label(
+            card, text="\u26a0 FETCH FAILED \u2014 ENTER DATA MANUALLY", fg="#c0392b", bg=bg,
+            font=("Arial", 9, "bold"),
+        ).grid(row=0, column=1, columnspan=2, sticky="w")
+        tk.Label(
+            card, text=entry.get("html_name", "?"),
+            font=("Arial", 10, "bold"), bg=bg, fg="#2c3e50",
+        ).grid(row=1, column=1, columnspan=2, sticky="w", pady=(1, 0))
+        tk.Label(
+            card,
+            text=f"Rarity: {rarity}  \u2014  power/bonus data is missing or zero in the DB.",
+            fg="#888", bg=bg, font=("Arial", 8, "italic"),
+        ).grid(row=2, column=1, columnspan=2, sticky="w", pady=(0, 4))
+
+        # ── Input fields ───────────────────────────────────────────────────
+        pwr_var  = tk.StringVar(value=str(entry.get("manual_power_th") or ""))
+        bon_var  = tk.StringVar(value=str(entry.get("manual_bonus_pct") or ""))
+        cell_var = tk.StringVar(value=str(entry.get("manual_cells") or 2))
+        self._vars.append({
+            "status":    tk.StringVar(value="missing_data"),
+            "power_th":  pwr_var,
+            "bonus_pct": bon_var,
+            "cells":     cell_var,
+        })
+
+        manual_row = tk.Frame(card, bg=bg)
+        manual_row.grid(row=3, column=1, columnspan=2, sticky="w")
+        tk.Label(manual_row, text="Power (TH):", bg=bg, font=("Arial", 8)).pack(side=tk.LEFT)
+        tk.Entry(manual_row, textvariable=pwr_var, width=12, font=("Arial", 9)).pack(
+            side=tk.LEFT, padx=(2, 10),
+        )
+        tk.Label(manual_row, text="Bonus (%):", bg=bg, font=("Arial", 8)).pack(side=tk.LEFT)
+        tk.Entry(manual_row, textvariable=bon_var, width=8, font=("Arial", 9)).pack(
+            side=tk.LEFT, padx=(2, 0),
+        )
+        tk.Label(manual_row, text="  Cells:", bg=bg, font=("Arial", 8)).pack(side=tk.LEFT)
+        tk.OptionMenu(manual_row, cell_var, "1", "2").pack(side=tk.LEFT, padx=(2, 0))
+
     # ── Persistence ───────────────────────────────────────────────────────
 
     def _finish(self) -> None:
+        # ── Validate completeness before saving ───────────────────────────
+        import tkinter.messagebox as _mb
+        issues: list[str] = []
+        for i, entry in enumerate(self.entries):
+            v      = self._vars[i]
+            status = v["status"].get()
+            name   = entry.get("html_name", f"miner {i + 1}")
+            if status == "pending":
+                issues.append(f"'{name}' \u2014 not yet confirmed or rejected")
+            elif status in ("rejected", "legacy", "missing_data"):
+                if not v["power_th"].get().strip():
+                    issues.append(f"'{name}' \u2014 Power (TH) is required")
+        if issues:
+            _mb.showerror(
+                "Incomplete entries",
+                "Please resolve all miners before saving:\n\n"
+                + "\n".join(f"\u2022 {s}" for s in issues),
+            )
+            return
         for i, entry in enumerate(self.entries):
             v = self._vars[i]
             entry["status"] = v["status"].get()
@@ -500,7 +695,7 @@ class VerifyWindow:
                 except (ValueError, KeyError):
                     entry["manual_cells"] = 2
                 _replace_db_record(entry)
-            elif entry["status"] == "legacy":
+            elif entry["status"] in ("legacy", "missing_data"):
                 try:
                     pwr = float(v["power_th"].get().replace(",", ".") or "0")
                     entry["manual_power_th"] = pwr if pwr > 0 else None
@@ -515,7 +710,10 @@ class VerifyWindow:
                     entry["manual_cells"] = int(v["cells"].get())
                 except (ValueError, KeyError):
                     entry["manual_cells"] = 2
-                _add_legacy_db_record(entry)
+                if entry["status"] == "legacy":
+                    _add_legacy_db_record(entry)
+                else:
+                    _add_missing_data_db_record(entry)
             else:
                 # Clear any stale manual overrides
                 entry.pop("manual_power_th", None)
@@ -523,12 +721,13 @@ class VerifyWindow:
                 entry.pop("manual_cells", None)
 
         _save_log(self.entries)
-        n_ok  = sum(1 for e in self.entries if e["status"] == "confirmed")
-        n_rej = sum(1 for e in self.entries if e["status"] == "rejected")
-        n_leg = sum(1 for e in self.entries if e["status"] == "legacy")
-        n_pnd = sum(1 for e in self.entries if e["status"] == "pending")
+        n_ok   = sum(1 for e in self.entries if e["status"] == "confirmed")
+        n_rej  = sum(1 for e in self.entries if e["status"] == "rejected")
+        n_leg  = sum(1 for e in self.entries if e["status"] == "legacy")
+        n_miss = sum(1 for e in self.entries if e["status"] == "missing_data")
+        n_pnd  = sum(1 for e in self.entries if e["status"] == "pending")
         print(f"Match log saved: {n_ok} confirmed, {n_rej} rejected, "
-              f"{n_leg} legacy, {n_pnd} still pending")
+              f"{n_leg} legacy, {n_miss} missing data, {n_pnd} still pending")
         self.root.destroy()
 
 
@@ -622,6 +821,7 @@ def _norm(s: str) -> str:
 
 def main() -> None:
     _collect_legacy_miners()
+    _collect_missing_data_miners()
     entries = _load_log()
     if not entries:
         print("No entries in match_log.json — nothing to verify.")

@@ -251,7 +251,9 @@ def build_state(rooms: list[dict], miners_db: dict[str, dict],
                 rarity = miner_data.get("rarity")
                 cells = miner_data.get("slot_size") or miner_cells(name, miners_db)
                 p, b = miner_stats(name, None, None, rarity, miners_db)
-                is_locked = (room_idx, rack_idx, miner_rank) in locked_set
+                if p == 0.0:
+                    print(f"  [!] '{name}' ({rarity}) has 0 power in DB — skipping as swap target")
+                is_locked = p == 0.0 or (room_idx, rack_idx, miner_rank) in locked_set
                 m = Miner(name, p, b, cells, rarity,
                           room_idx, rack_idx, slot_idx, pos_in_slot,
                           miner_rank=miner_rank, locked=is_locked)
@@ -321,6 +323,22 @@ def build_inventory_pool(inv_list: list[dict], miners_db: dict[str, dict]) -> di
             p_th2, b_pct2 = miner_stats(name, p_th, b_pct, rarity, miners_db)
             p_th  = p_th  or p_th2
             b_pct = b_pct if b_pct is not None else b_pct2
+        # If rarity defaulted to common but power_th suggests a different tier,
+        # re-guess from miners_db so the correct rarity flows through to swaps.
+        if rarity == "common" and p_th:
+            rec = miners_db.get(name.lower())
+            if rec is None:
+                rec = miners_db.get(_norm_name(name))
+            if rec:
+                best_r, best_diff = "common", float("inf")
+                for r_name, tier in rec.get("rarities", {}).items():
+                    ref = tier.get("power_th")
+                    if ref and abs(ref - p_th) < best_diff:
+                        best_diff = abs(ref - p_th)
+                        best_r = r_name
+                if best_r != "common" and best_diff < p_th * 0.05:  # within 5%
+                    rarity = best_r
+                    key = (name.lower(), rarity)  # rekey with corrected rarity
         cells = miner_cells(name, miners_db)
         key = (name.lower(), rarity)
         pool[key] = {
@@ -366,12 +384,14 @@ def _delta_power(placed: list[Miner],
 
     new_raw = raw
     new_bonus = bonus
+    bonus_already_deducted: set[tuple] = set()
     for m in remove:
         new_raw -= m.power_th
         # Bonus disappears only if this (name, rarity) pair has no copies left
         k = (m.name.lower(), m.rarity or "common")
-        if pairs_after_remove.get(k, 0) == 0:
+        if pairs_after_remove.get(k, 0) == 0 and k not in bonus_already_deducted:
             new_bonus -= m.bonus_pct
+            bonus_already_deducted.add(k)
 
     # Add incoming miners using their actual rarity for bonus dedup
     already_present = set(pairs_after_remove.keys())

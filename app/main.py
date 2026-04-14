@@ -196,7 +196,7 @@ def main() -> None:
     if missing_room:
         print(f"\n=== Phase 3: downloading {len(missing_room)} missing room miner(s) ===")
         for slug, name in missing_room:
-            print(f"  Fetching '{name}' (slug: {slug})...")
+            print(f"Fetching '{name}' (slug: {slug})...")
             lookup_miner_by_slug(slug, html_name=name)
     else:
         print("\n=== Phase 3: all room miner images present ===")
@@ -247,7 +247,7 @@ def main() -> None:
         if inv_names_to_fetch:
             print(f"=== Phase 6: downloading {len(inv_names_to_fetch)} inventory-only miner(s) ===")
             for name in sorted(inv_names_to_fetch):
-                print(f"  Fetching '{name}'...")
+                print(f"Fetching '{name}'...")
                 lookup_miner(name, expected_name=name)
         else:
             print("=== Phase 6: all inventory miners already downloaded ===")
@@ -273,12 +273,13 @@ def main() -> None:
 
     # ── Phase 9: verify miner matches ────────────────────────────────────
     import verify_matches as _vm
-    _vm._collect_legacy_miners()   # queue any legacy-rarity miners for manual entry
+    _vm._collect_legacy_miners()        # queue any legacy-rarity miners for manual entry
+    _vm._collect_missing_data_miners()  # queue miners with missing/zero DB data
     _log_path = Path(_MATCH_LOG_PATH)
     if _log_path.exists():
         import json as _json
         _log_entries = _json.loads(_log_path.read_text(encoding="utf-8"))
-        if any(e.get("status") in ("pending", "legacy") for e in _log_entries):
+        if any(e.get("status") in ("pending", "legacy", "missing_data") for e in _log_entries):
             print("\n=== Phase 9: verifying miner name matches & legacy data ===")
             _vm.main()
         else:

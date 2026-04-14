@@ -119,27 +119,6 @@ Each swap is outlined in a unique colour with a numbered badge. The legend strip
 
 After showing the current state the optimizer asks for the actual total bonus % shown in-game. Enter it once and the offset is saved to `data/set_bonus.json` and reused on every subsequent run.
 
-### placed_room*.json structure
-
-```json
-{
-  "source_file": "Room1.html",
-  "parsed_at": "2026-04-12T10:00:00+00:00",
-  "total_placed": 49,
-  "racks": [
-    [
-      { "name": "Energy Amplifier", "slug": "energy_amplifier", "rarity": "common", "slot_size": 2 },
-      { "name": "Valhalla's Vault",  "slug": "valhallas_vault",  "rarity": "rare",   "slot_size": 2 }
-    ],
-    [ ... ]
-  ]
-}
-```
-
-- `racks` — list of racks; each rack is a list of miners in top-to-bottom order.
-- `rarity` — read from the in-game badge (`common` / `uncommon` / `rare` / `epic` / `legendary` / `unreal`).
-- `slot_size` — cells the miner occupies (1 or 2).
-
 ---
 
 ## Resetting for a new run
@@ -164,6 +143,29 @@ python app/reset.py --keep-miners
 ```
 
 After resetting, drop your new `.html` pages into `html_page/` and run `python app/main.py` as normal.
+
+---
+
+### placed_room*.json structure
+
+```json
+{
+  "source_file": "Room1.html",
+  "parsed_at": "2026-04-12T10:00:00+00:00",
+  "total_placed": 49,
+  "racks": [
+    [
+      { "name": "Energy Amplifier", "slug": "energy_amplifier", "rarity": "common", "slot_size": 2 },
+      { "name": "Valhalla's Vault",  "slug": "valhallas_vault",  "rarity": "rare",   "slot_size": 2 }
+    ],
+    [ ... ]
+  ]
+}
+```
+
+- `racks` — list of racks; each rack is a list of miners in top-to-bottom order.
+- `rarity` — read from the in-game badge (`common` / `uncommon` / `rare` / `epic` / `legendary` / `unreal`).
+- `slot_size` — cells the miner occupies (1 or 2).
 
 ---
 

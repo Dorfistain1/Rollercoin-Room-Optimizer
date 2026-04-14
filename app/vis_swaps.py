@@ -178,7 +178,15 @@ def render_swap_image(
         ri = swap["rack"] - 1
         x0 = PADDING + ri * (CELL_W + PADDING)
 
-        for pos in swap.get("rack_positions", []):
+        _swap_rack_positions = swap.get("rack_positions", [])
+        _swap_add_all = swap.get("add", [])
+        # When each position maps 1-to-1 to an incoming miner, show only the
+        # corresponding miner per cell (e.g. pair swap: pos3→A, pos4→B).
+        # When two miners go into a single cell (2-cell→pair), show both side-by-side.
+        _one_to_one = (len(_swap_rack_positions) > 1
+                       and len(_swap_rack_positions) == len(_swap_add_all))
+
+        for pos_i, pos in enumerate(_swap_rack_positions):
             y0 = PADDING + pos * (total_cell_h + PADDING)
 
             # Thick coloured border (3 px wide)
@@ -199,8 +207,13 @@ def render_swap_image(
             draw.text((bx, by), str(swap_i + 1),
                       fill=(255, 255, 255, 255), anchor="mm", font=fn11)
 
-            # If swap adds two miners (pair), draw two mini-slots side-by-side
-            _add_items = swap.get("add", [])
+            # Determine which add items to show in this specific cell
+            if _one_to_one:
+                _add_items = [_swap_add_all[pos_i]] if pos_i < len(_swap_add_all) else []
+            else:
+                _add_items = _swap_add_all
+
+            # If swap puts two miners into one slot, draw side-by-side
             if len(_add_items) == 2:
                 left = _add_items[0]
                 right = _add_items[1]

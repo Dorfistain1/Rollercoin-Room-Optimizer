@@ -748,7 +748,7 @@ def lookup_miner(name: str, expected_name: str = "", log_slug: str | None = None
     print(f"Searching for '{name}'...")
     print(f"  URL: {search_url}")
 
-    miners = scrape_page(search_url)
+    miners = scrape_page(search_url, download_images=False)
 
     # Prefer an exact name match in the results
     used_secondary = False
@@ -768,6 +768,16 @@ def lookup_miner(name: str, expected_name: str = "", log_slug: str | None = None
         if match:
             print(f"  Matched by image slug: {match['name']!r}")
             used_secondary = True
+
+    # Download the matched miner's image (only this one, not every search result)
+    if match is not None:
+        img_url = match.pop("_img_url", None)
+        if img_url:
+            img_path = os.path.join(MINERS_DIR, match["image"])
+            if not os.path.exists(img_path):
+                os.makedirs(MINERS_DIR, exist_ok=True)
+                print(f"    Downloading image: {match['image']}")
+                download_image(img_url, img_path)
 
     if match is None:
         # Progressive search using slug words
@@ -823,12 +833,13 @@ def lookup_miner(name: str, expected_name: str = "", log_slug: str | None = None
             print(f"  [!] Could not determine cell count for '{match['name']}'")
         time.sleep(1.0)
 
-    # Log for verification whenever secondary search was used
-    if used_secondary:
-        _searched  = expected_name or name
-        _slug_key  = log_slug if log_slug is not None else _norm_stem(_searched)
+    # Log for verification when secondary search was used OR name mismatch detected
+    _searched  = expected_name or name
+    _slug_key  = log_slug if log_slug is not None else _norm_stem(_searched)
+    name_mismatch = expected_name and _norm_stem(match["name"]) != _norm_stem(expected_name)
+    if used_secondary or name_mismatch:
         _log_match(_slug_key, _searched, match["name"], match)
-        if _norm_stem(match["name"]) != _norm_stem(_searched):
+        if name_mismatch:
             print(f"  [!] Name mismatch flagged for verification: '{_searched}' -> '{match['name']}'")
         else:
             print(f"  [!] Secondary search result flagged for verification: '{_searched}'")
