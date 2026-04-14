@@ -13,6 +13,7 @@ Scrapes your [RollerCoin](https://rollercoin.com/?r=kyaf3h0b) rooms from saved H
 | `app/select_locked.py` | Interactive UI to mark placed miners as locked (won't be swapped). |
 | `app/verify_matches.py` | UI to confirm or reject auto-matched miner names. |
 | `app/refetch_missing.py` | Re-fetches miners whose power/bonus data is missing. |
+| `app/reset.py` | Deletes all generated data and returns the project to a clean state. |
 
 ## Setup
 Clone this repository (HTTPS):
@@ -138,6 +139,31 @@ After showing the current state the optimizer asks for the actual total bonus % 
 - `racks` — list of racks; each rack is a list of miners in top-to-bottom order.
 - `rarity` — read from the in-game badge (`common` / `uncommon` / `rare` / `epic` / `legendary` / `unreal`).
 - `slot_size` — cells the miner occupies (1 or 2).
+
+---
+
+## Resetting for a new run
+
+When you want to start fresh with new room saves, run the reset script to wipe all generated data:
+
+```bash
+python app/reset.py
+```
+
+This deletes:
+- `data/*.json` — parsed rooms, inventory, swap plan, lock list, match log, set-bonus offset
+- `vis/*.png` — room visualizations
+- `output/*.png` — swap visualizations
+- `html_page/*.html` — saved game pages
+- `miners/` — all downloaded miner images and `miners_data.json`
+
+**If your rooms haven't changed much** (most of the same miners are still there), use the `--keep-miners` flag to skip re-downloading images and stats:
+
+```bash
+python app/reset.py --keep-miners
+```
+
+After resetting, drop your new `.html` pages into `html_page/` and run `python app/main.py` as normal.
 
 ---
 
