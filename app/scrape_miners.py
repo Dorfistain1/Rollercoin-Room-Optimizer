@@ -37,6 +37,7 @@ HEADERS = {
     "Accept-Encoding": "gzip, deflate, br",
     "Connection": "keep-alive",
     "Upgrade-Insecure-Requests": "1",
+    "Referer": "https://minaryganar.com/miner/",
 }
 
 
@@ -412,10 +413,60 @@ def scrape_page(url: str, download_images: bool = True) -> list[dict]:
 
     soup = BeautifulSoup(response.text, "lxml")
 
-    # Each miner is wrapped in a block with the class 'brxe-gzrnkg'
+    # Each miner is wrapped in a block with the class 'brxe-gzrnkg'.
+    # Bricks Builder generates these hash-based class names and they can change
+    # on theme updates.  Try the known class first, then auto-detect.
     cards = soup.find_all(
         lambda tag: tag.has_attr("class") and "brxe-gzrnkg" in tag["class"]
     )
+
+    if not cards:
+        # Auto-detect card container: find any brxe-* class (length > 8 rules out
+        # generic utility classes) that appears ≥ 3 times AND whose elements
+        # contain both a JetEngine name field and a link to /miner/.
+        from collections import Counter as _Counter
+        brxe_counts: _Counter = _Counter(
+            cls
+            for tag in soup.find_all(lambda t: t.has_attr("class"))
+            for cls in tag["class"]
+            if cls.startswith("brxe-") and len(cls) > 8
+        )
+        for cls, count in brxe_counts.most_common(30):
+            if count < 3:
+                break
+            candidates = soup.find_all(
+                lambda tag, _c=cls: tag.has_attr("class") and _c in tag["class"]
+            )
+            has_name = any(
+                c.find(
+                    lambda t: t.has_attr("class")
+                    and "jet-listing-dynamic-field__content" in t["class"]
+                )
+                for c in candidates
+            )
+            has_link = any(
+                c.find("a", href=lambda h: h and "/miner/" in h)
+                for c in candidates
+            )
+            if has_name and has_link:
+                print(f"  [auto-detect] Card class changed: using '{cls}' ({count} cards)")
+                cards = candidates
+                break
+
+    if not cards:
+        # Last-resort: each wp-post-image img's parent might be the card
+        imgs = soup.find_all("img", class_=lambda c: c and "wp-post-image" in c)
+        if imgs:
+            seen: set = set()
+            parents = []
+            for img in imgs:
+                p = img.parent
+                if id(p) not in seen:
+                    seen.add(id(p))
+                    parents.append(p)
+            if len(parents) >= 2:
+                print(f"  [auto-detect] Falling back to wp-post-image parents ({len(parents)} cards)")
+                cards = parents
 
     if not cards:
         return []
@@ -877,10 +928,36 @@ def lookup_miner_by_slug(slug: str, html_name: str = "") -> dict | None:
     slug = slug.replace("-", "_")
     display = " ".join(w.capitalize() for w in slug.split("_"))
     effective_html = html_name or display
-    # Logging is handled inside lookup_miner() when secondary search is used
-    match = lookup_miner(display, expected_name=effective_html, log_slug=slug)
-    if match is None:
-        return None
+
+    # ── Strategy 1: direct detail page (fastest, least likely to be blocked) ──
+    # We already have the slug, so try the detail URL before any search queries.
+    print(f"  Trying direct page for '{slug}'...")
+    match = fetch_miner_by_game_slug(slug)
+    if match and match.get("rarities", {}).get("common", {}).get("power_th"):
+        # Got usable data — check for name mismatch and save
+        if _norm_stem(match["name"]) != _norm_stem(effective_html):
+            _log_match(slug, effective_html, match["name"], match)
+            print(f"  [!] Name mismatch flagged for verification: '{effective_html}' -> '{match['name']}'")
+        existing: list[dict] = []
+        if os.path.exists(OUTPUT_JSON):
+            with open(OUTPUT_JSON, encoding="utf-8") as f:
+                existing = json.load(f)
+        lower_map = {m["name"].lower(): i for i, m in enumerate(existing)}
+        idx = lower_map.get(match["name"].lower())
+        if idx is not None:
+            existing[idx] = match
+            print(f"  Updated existing entry in {OUTPUT_JSON}")
+        else:
+            existing.append(match)
+            print(f"  Added new entry to {OUTPUT_JSON}")
+        save_json(existing)
+    else:
+        # Direct page failed or returned no power data — fall back to search
+        if match is not None:
+            print(f"  Direct page gave no power data — falling back to search...")
+        match = lookup_miner(display, expected_name=effective_html, log_slug=slug)
+        if match is None:
+            return None
 
     # Ensure the image lives under the game-slug filename so that
     # load_first_frame(slug) always finds it on the first exact-match attempt.

@@ -58,7 +58,7 @@ pip install -r requirements.txt
 
 1. Open your RollerCoin room in edit view in a browser and open the inventory (miners) tab.
 
-2. Sort by `Power` or `Bonus`.
+2. Sort by `Power` or `Bonus` (High to Low).
 3. Press `Ctrl+S` (or `Cmd+S` on Mac) to save the inventory page into `html_page/`.
 4. Scroll right until the loading icon appears, then save again to capture the next chunk. Repeat as needed.
 5. Repeat for the other sort order if you want both views (recommended).
@@ -224,4 +224,3 @@ python app/select_locked.py
 ## Known limitations
 
 - Rack bonuses are not taken into account.
-- Set bonuses are not supported, but miners can be locked in place to prevent them from being swapped out.

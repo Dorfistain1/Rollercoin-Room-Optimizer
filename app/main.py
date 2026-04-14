@@ -81,6 +81,38 @@ def collect_slugs(racks: list[list[dict]]) -> dict[str, str]:
     return seen
 
 
+def _is_sorted_inventory(soup) -> bool:
+    """
+    Return True if the page contains an inventory modal whose entries appear
+    to be sorted high→low by power or bonus.
+
+    The game sorts inventory by power (default) or bonus before the user saves.
+    A strongly-descending sequence (≤10% inversions) is a reliable signal.
+    At least 3 entries with values are required to avoid false positives.
+    """
+    batch = parse_inventory(soup)
+    if not batch:
+        return False
+
+    entries = list(batch.values())
+
+    def _mostly_descending(vals: list[float]) -> bool:
+        if len(vals) < 3:
+            return False
+        inv = sum(1 for i in range(len(vals) - 1) if vals[i] < vals[i + 1])
+        return inv / (len(vals) - 1) <= 0.10
+
+    powers = [e["power_th"] for e in entries if e.get("power_th") is not None]
+    if _mostly_descending(powers):
+        return True
+
+    bonuses = [e["bonus_pct"] for e in entries if e.get("bonus_pct") is not None]
+    if _mostly_descending(bonuses):
+        return True
+
+    return False
+
+
 def _is_forced_inventory(path: Path) -> bool:
     """Return True if the filename stem signals an inventory capture.
 
@@ -101,11 +133,16 @@ def classify_pages(paths: list[Path], miners_index: dict) -> tuple[
 
     Classification order (first match wins):
       1. Filename stem matches power / power1 / bonus / bonus2 / …  → inventory
-      2. Placed-miner fingerprint matches a previously seen room      → inventory
+      2. Placed-miner fingerprint matches a previously seen room      → check sort
+         2a. If the new file has a sorted inventory (and the old one doesn't)
+             → new file is inventory  (expected case)
+         2b. If the old file has a sorted inventory (and the new one doesn't)
+             → old file was misclassified; swap: old → inventory, new → room
+         2c. If neither / both are sorted → keep first-seen as room
       3. Otherwise                                                    → new room
     """
     slug_index = build_slug_index(miners_index)
-    seen: dict[frozenset, int] = {}   # fingerprint -> room_num
+    seen: dict[frozenset, tuple[int, Path]] = {}   # fingerprint -> (room_num, path)
     room_pages: list[tuple[int, Path]] = []
     inv_pages: list[Path] = []
     room_num = 1
@@ -125,14 +162,36 @@ def classify_pages(paths: list[Path], miners_index: dict) -> tuple[
 
         fp = room_fingerprint(racks)
         if fp in seen:
-            print(f"  [Inventory] {path.name}  (matches Room {seen[fp]})")
-            inv_pages.append(path)
+            prev_room_num, prev_path = seen[fp]
+
+            # Determine which file is the inventory by checking sort order.
+            cur_sorted  = _is_sorted_inventory(soup)
+            prev_sorted = _is_sorted_inventory(
+                BeautifulSoup(prev_path.read_bytes(), "lxml")
+            )
+
+            if prev_sorted and not cur_sorted:
+                # The file we already called a room is actually the inventory — swap.
+                print(
+                    f"  [!] Reclassifying: '{prev_path.name}' is inventory "
+                    f"(sorted by power/bonus), '{path.name}' is Room {prev_room_num}"
+                )
+                room_pages = [(rn, rp) for rn, rp in room_pages if rp != prev_path]
+                inv_pages.append(prev_path)
+                room_pages.append((prev_room_num, path))
+                seen[fp] = (prev_room_num, path)
+            else:
+                # Current file is inventory (or we can't tell — keep first-seen as room)
+                reason = "sorted inventory" if cur_sorted else f"matches Room {prev_room_num}"
+                print(f"  [Inventory] {path.name}  ({reason})")
+                inv_pages.append(path)
         else:
-            seen[fp] = room_num
+            seen[fp] = (room_num, path)
             room_pages.append((room_num, path))
             print(f"  [Room {room_num}]    {path.name}")
             room_num += 1
 
+    room_pages.sort(key=lambda x: x[0])   # restore sequential order after any swaps
     return room_pages, inv_pages
 
 
@@ -161,6 +220,12 @@ def build_inventory_output(
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main() -> None:
+    # Ensure required directories exist (fresh installs from zip won't have them)
+    HTML_DIR.mkdir(parents=True, exist_ok=True)
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    VIS_DIR.mkdir(parents=True, exist_ok=True)
+    (HTML_DIR.parent / "miners").mkdir(parents=True, exist_ok=True)
+
     all_paths = sorted(HTML_DIR.glob("*.html"), reverse=True)
     if not all_paths:
         print(f"No .html files found in {HTML_DIR}/")
@@ -291,6 +356,11 @@ def main() -> None:
     print("\n=== Phase 10: select locked miners ===")
     import select_locked as _sl
     _sl.main()
+
+    # ── Phase 10.5: define miner set groups ──────────────────────────────
+    print("\n=== Phase 10.5: define miner set groups ===")
+    import select_sets as _ss
+    _ss.main()
 
     # ── Phase 11: run optimizer ───────────────────────────────────────────
     print("\n=== Phase 11: running optimizer ===")

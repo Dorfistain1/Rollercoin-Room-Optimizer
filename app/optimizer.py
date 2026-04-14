@@ -46,7 +46,8 @@ INVENTORY_JSON = _ROOT / "data/inventory.json"
 MINERS_DATA    = _ROOT / "miners/miners_data.json"
 LOCKED_JSON    = _ROOT / "data/locked.json"
 PLACED_DIR     = _ROOT / "data"
-SET_BONUS_JSON = _ROOT / "data/set_bonus.json"
+SET_BONUS_JSON  = _ROOT / "data/set_bonus.json"
+SET_GROUPS_JSON = _ROOT / "data/set_groups.json"
 
 
 # ---------------------------------------------------------------------------
@@ -102,6 +103,44 @@ def load_locked() -> set[tuple[int, int, int]]:
         (e["room"] - 1, e["rack"], e["miner_idx"])
         for e in entries
     }
+
+
+def load_set_groups() -> list[dict]:
+    """Load set_groups.json. Returns empty list if file doesn't exist."""
+    if not SET_GROUPS_JSON.exists():
+        return []
+    try:
+        return json.loads(SET_GROUPS_JSON.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+
+
+def set_group_bonus(
+    placed_names: list[str],
+    set_groups: list[dict],
+) -> tuple[float, float]:
+    """
+    Compute bonus contributions from all active set-group thresholds.
+
+    placed_names: list of lowercased miner names (one entry per placed miner;
+                  duplicates count independently).
+    Returns (extra_pct, extra_raw_th):
+      extra_pct    — added to the bonus multiplier  (e.g. 5.0 → +5%)
+      extra_raw_th — added to effective power AFTER multiplication; NOT scaled
+                     by the bonus % (so +5 000 TH stays +5 000 regardless of %)
+    """
+    extra_pct = 0.0
+    extra_raw = 0.0
+    for sg in set_groups:
+        members_lower = {n.lower() for n in sg.get("member_names", [])}
+        count = sum(1 for n in placed_names if n in members_lower)
+        for threshold in sg.get("thresholds", []):
+            if count >= threshold["count"]:
+                if threshold.get("type") == "pct":
+                    extra_pct += threshold["value"]
+                else:  # raw_th
+                    extra_raw += threshold["value"]
+    return extra_pct, extra_raw
 
 
 def load_set_bonus() -> float:
@@ -280,12 +319,16 @@ def rack_capacity(room: dict, rack_idx: int, miners_db: dict[str, dict]) -> int:
 # Power calculation
 # ---------------------------------------------------------------------------
 
-def total_power(placed: list[Miner]) -> tuple[float, float, float]:
-    """Return (raw_power, total_bonus_pct, effective_power).
+def total_power(
+    placed: list[Miner],
+    set_groups: list[dict] | None = None,
+) -> tuple[float, float, float]:
+    """Return (raw_power, miner_bonus_pct, effective_power).
 
-    The game deduplicates bonus by (name, rarity) pair — so a common and a rare
-    version of the same miner each contribute their own bonus independently,
-    but two copies of the same name+rarity only count once.
+    Miner bonus deduplicates by (name, rarity) pair.  Set-group bonuses apply
+    on top using the formula:
+      effective = raw * (1 + (miner_bonus + set_pct) / 100) + set_raw_th
+    where set_raw_th is NOT multiplied by the bonus % (game rule).
     """
     raw = sum(m.power_th for m in placed)
     seen: set[tuple[str, str]] = set()
@@ -295,7 +338,12 @@ def total_power(placed: list[Miner]) -> tuple[float, float, float]:
         if key not in seen:
             seen.add(key)
             bonus += m.bonus_pct
-    effective = raw * (1.0 + bonus / 100.0)
+    set_pct = 0.0
+    set_raw = 0.0
+    if set_groups:
+        placed_names = [m.name.lower() for m in placed]
+        set_pct, set_raw = set_group_bonus(placed_names, set_groups)
+    effective = raw * (1.0 + (bonus + set_pct) / 100.0) + set_raw
     return raw, bonus, effective
 
 
@@ -361,7 +409,8 @@ def _delta_power(placed: list[Miner],
                  add_name: list[str],
                  add_power: list[float],
                  add_bonus: list[float],
-                 add_rarity: list[str] | None = None) -> float:
+                 add_rarity: list[str] | None = None,
+                 set_groups: list[dict] | None = None) -> float:
     """
     Compute the change in effective_power if we remove `remove` miners and
     add miners described by (add_name, add_power, add_bonus, add_rarity).
@@ -372,7 +421,7 @@ def _delta_power(placed: list[Miner],
     if add_rarity is None:
         add_rarity = ["common"] * len(add_name)
 
-    raw, bonus, eff = total_power(placed)
+    raw, bonus, eff = total_power(placed, set_groups)
 
     # Count remaining (name, rarity) pairs after removal — mirrors total_power() key
     remove_set = {id(m) for m in remove}
@@ -402,7 +451,15 @@ def _delta_power(placed: list[Miner],
             new_bonus += ab
             already_present.add(k)
 
-    new_eff = new_raw * (1.0 + new_bonus / 100.0)
+    # Set-group bonus for the simulated new state
+    new_set_pct = 0.0
+    new_set_raw = 0.0
+    if set_groups:
+        new_placed_names  = [m.name.lower() for m in placed if id(m) not in remove_set]
+        new_placed_names += [n.lower() for n in add_name]
+        new_set_pct, new_set_raw = set_group_bonus(new_placed_names, set_groups)
+
+    new_eff = new_raw * (1.0 + (new_bonus + new_set_pct) / 100.0) + new_set_raw
     return new_eff - eff
 
 
@@ -413,7 +470,8 @@ def _delta_power(placed: list[Miner],
 def find_best_swap(placed: list[Miner],
                    inv_pool: dict[str, dict],
                    rooms: list[dict],
-                   miners_db: dict[str, dict]
+                   miners_db: dict[str, dict],
+                   set_groups: list[dict] | None = None,
                    ) -> tuple[float, list[Miner], list[dict]] | None:
     """
     Find the single best swap that improves effective power.
@@ -482,6 +540,7 @@ def find_best_swap(placed: list[Miner],
                     [cand["power_th"]],
                     [cand["bonus_pct"]],
                     [cand["rarity"]],
+                    set_groups=set_groups,
                 )
                 if delta > best_delta:
                     best_delta = delta
@@ -503,6 +562,7 @@ def find_best_swap(placed: list[Miner],
                         [c1["power_th"], c2["power_th"]],
                         [c1["bonus_pct"], c2["bonus_pct"]],
                         [c1["rarity"], c2["rarity"]],
+                        set_groups=set_groups,
                     )
                     if delta > best_delta:
                         best_delta = delta
@@ -532,6 +592,7 @@ def find_best_swap(placed: list[Miner],
                             [cand["power_th"]],
                             [cand["bonus_pct"]],
                             [cand["rarity"]],
+                            set_groups=set_groups,
                         )
                         if delta > best_delta:
                             best_delta = delta
@@ -555,6 +616,7 @@ def find_best_swap(placed: list[Miner],
                                 [c1["power_th"], c2["power_th"]],
                                 [c1["bonus_pct"], c2["bonus_pct"]],
                                 [c1["rarity"], c2["rarity"]],
+                                set_groups=set_groups,
                             )
                             if delta > best_delta:
                                 best_delta = delta
@@ -576,6 +638,7 @@ def find_best_swap(placed: list[Miner],
                         [cand["power_th"]],
                         [cand["bonus_pct"]],
                         [cand["rarity"]],
+                        set_groups=set_groups,
                     )
                     if delta > best_delta:
                         best_delta = delta
@@ -643,7 +706,11 @@ def apply_swap(placed: list[Miner],
 # Swap chain collapsing
 # ---------------------------------------------------------------------------
 
-def compute_swaps(original: list[Miner], final: list[Miner]) -> list[dict]:
+def compute_swaps(
+    original: list[Miner],
+    final: list[Miner],
+    set_groups: list[dict] | None = None,
+) -> list[dict]:
     """
     Diff original vs final, applying changes sequentially to compute a marginal
     effective-power delta for each physical swap.
@@ -681,11 +748,11 @@ def compute_swaps(original: list[Miner], final: list[Miner]) -> list[dict]:
         orig_ms = orig_by_slot.get(slot_key, [])
         add_ms  = final_by_slot.get(slot_key, [])
 
-        _, _, eff_before = total_power(current)
+        _, _, eff_before = total_power(current, set_groups)
         remove_ids = {id(m) for m in current
                       if (m.room_idx, m.rack_idx, m.slot_idx) == slot_key}
         current = [m for m in current if id(m) not in remove_ids] + add_ms
-        _, _, eff_after = total_power(current)
+        _, _, eff_after = total_power(current, set_groups)
 
         swaps.append({
             "room":           room_i + 1,
@@ -723,20 +790,38 @@ def main(dry_run: bool = False) -> None:
     original_placed = build_state(rooms, miners_db, locked_set)
     inv_pool = build_inventory_pool(inv_list, miners_db)
 
-    raw0, bonus0, eff0 = total_power(original_placed)
+    set_groups = load_set_groups()
+    raw0, bonus0, eff0 = total_power(original_placed, set_groups)
+    set_pct_0, set_raw_0 = (
+        set_group_bonus([m.name.lower() for m in original_placed], set_groups)
+        if set_groups else (0.0, 0.0)
+    )
     set_bonus = load_set_bonus()
 
     print(f"\nCurrent state:")
     print(f"  Placed miners : {len(original_placed)}")
     print(f"  Raw power     : {raw0:>12,.1f} Th/s")
-    print(f"  Total bonus   : {bonus0:>12.2f} %")
+    print(f"  Miner bonus   : {bonus0:>12.2f} %")
+    if set_groups:
+        pnames0 = [m.name.lower() for m in original_placed]
+        for sg in set_groups:
+            mbrs   = {n.lower() for n in sg.get("member_names", [])}
+            cnt    = sum(1 for n in pnames0 if n in mbrs)
+            active = sum(1 for t in sg.get("thresholds", []) if cnt >= t["count"])
+            print(f"  Set '{sg['name']}': {cnt}/{len(mbrs)} members, "
+                  f"{active} tier(s) active")
+        if set_pct_0:
+            print(f"  Set pct bonus : {set_pct_0:>12.2f} %")
+        if set_raw_0:
+            print(f"  Set raw bonus : {set_raw_0:>12,.1f} Th/s")
     print(f"  Effective     : {eff0:>12,.1f} Th/s")
 
-    set_bonus = _prompt_set_bonus(raw0, bonus0, set_bonus)
-    adj_bonus0 = bonus0 + set_bonus
-    adj0 = raw0 * (1.0 + adj_bonus0 / 100.0)
+    set_bonus = _prompt_set_bonus(raw0, bonus0 + set_pct_0, set_bonus)
+    adj_total_pct0 = bonus0 + set_pct_0 + set_bonus
+    adj0 = raw0 * (1.0 + adj_total_pct0 / 100.0) + set_raw_0
     if set_bonus != 0.0:
-        print(f"  Adjusted bonus: {adj_bonus0:>10.2f} %  (set bonus: {set_bonus:+.2f}%)")
+        print(f"  Adj total pct : {adj_total_pct0:>10.2f} %  "
+              f"(manual offset: {set_bonus:+.2f}%)")
         print(f"  Adjusted eff  : {adj0:>12,.1f} Th/s")
     print(f"\nInventory      : {sum(e['count'] for e in inv_pool.values())} miners "
           f"({len(inv_pool)} unique)\n")
@@ -746,7 +831,7 @@ def main(dry_run: bool = False) -> None:
     iteration = 0
 
     while True:
-        result = find_best_swap(placed, inv_pool, rooms, miners_db)
+        result = find_best_swap(placed, inv_pool, rooms, miners_db, set_groups)
         if result is None:
             print("No further improvements found.")
             break
@@ -762,22 +847,27 @@ def main(dry_run: bool = False) -> None:
         print("Room is already optimal given available inventory.")
         return
 
-    raw1, bonus1, eff1 = total_power(placed)
+    raw1, bonus1, eff1 = total_power(placed, set_groups)
     gain = eff1 - eff0
-    adj_bonus1 = bonus1 + set_bonus
-    adj1 = raw1 * (1.0 + adj_bonus1 / 100.0)
+    set_pct_1, set_raw_1 = (
+        set_group_bonus([m.name.lower() for m in placed], set_groups)
+        if set_groups else (0.0, 0.0)
+    )
+    adj_total_pct1 = bonus1 + set_pct_1 + set_bonus
+    adj1 = raw1 * (1.0 + adj_total_pct1 / 100.0) + set_raw_1
     gain_str     = f"+{gain:,.1f}"         if gain >= 0 else f"{gain:,.1f}"
     adj_gain_str = f"+{adj1 - adj0:,.1f}"  if adj1 >= adj0 else f"{adj1 - adj0:,.1f}"
     print(f"\nOptimised state:")
     print(f"  Raw power     : {raw1:>12,.1f} Th/s  (was {raw0:,.1f})")
-    print(f"  Total bonus   : {bonus1:>12.2f} %  (was {bonus0:.2f}%)")
+    print(f"  Miner bonus   : {bonus1:>12.2f} %  (was {bonus0:.2f}%)")
     print(f"  Effective     : {eff1:>12,.1f} Th/s  ({gain_str})")
-    if set_bonus != 0.0:
-        print(f"  Adj bonus     : {adj_bonus1:>12.2f} %  (was {adj_bonus0:.2f}%, set bonus: {set_bonus:+.2f}%)")
+    if set_bonus != 0.0 or set_groups:
+        print(f"  Adj total pct : {adj_total_pct1:>10.2f} %  "
+              f"(was {adj_total_pct0:.2f}%, manual offset: {set_bonus:+.2f}%)")
         print(f"  Adj effective : {adj1:>12,.1f} Th/s  ({adj_gain_str})")
 
     # Collapse chains → minimal physical swaps
-    swaps = compute_swaps(original_placed, placed)
+    swaps = compute_swaps(original_placed, placed, set_groups)
     print(f"\n=== {len(swaps)} physical swap(s) to make ===")
     for idx, s in enumerate(swaps, 1):
         rem   = " + ".join(f"{e['name']} ({e['rarity']})" for e in s["remove"])

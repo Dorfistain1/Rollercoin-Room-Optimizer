@@ -153,8 +153,11 @@ class RoomSelector:
         self.next_btn = tk.Button(top, text="Next ▶", width=8, command=self._next)
         self.next_btn.pack(side=tk.LEFT)
 
-        tk.Label(top, text="  Click a miner to lock it from being swapped",
-                 fg="#666").pack(side=tk.LEFT, padx=16)
+        tk.Label(
+            top,
+            text="  Lock the miners that belong to a set rack — the next step will ask about bonuses for each locked rack",
+            fg="#666",
+        ).pack(side=tk.LEFT, padx=16)
 
         tk.Button(top, text="Done — save & close",
                   bg="#27ae60", fg="white", font=("Arial", 10, "bold"),
