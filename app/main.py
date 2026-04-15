@@ -301,9 +301,18 @@ def main() -> None:
         print(f"  Merged total: {sum(v['count'] for v in merged.values())} cards, {len(merged)} unique miners\n")
 
         # ── Phase 6: download inventory-only miners ───────────────────────
-        # Normalize apostrophe variants so "Granny\u2019s Cake" matches "Granny's Cake" in DB
+        # Normalize apostrophe variants and Cyrillic look-alike letters so names
+        # like "Battle of the Сurrents" (Cyrillic С = U+0421) match the DB entry
+        # that was stored with a Latin C.
+        _CONFUSABLES = str.maketrans({
+            '\u0410': 'A', '\u0412': 'B', '\u0421': 'C', '\u0415': 'E',
+            '\u041A': 'K', '\u041C': 'M', '\u041D': 'H', '\u041E': 'O',
+            '\u0420': 'P', '\u0422': 'T', '\u0425': 'X',
+            '\u0430': 'a', '\u0435': 'e', '\u043E': 'o',
+            '\u0440': 'p', '\u0441': 'c', '\u0445': 'x',
+        })
         def _ninv(s: str) -> str:
-            return s.lower().replace("'", "").replace("\u2019", "")
+            return s.translate(_CONFUSABLES).lower().replace("'", "").replace("\u2019", "")
         _mi_norm = {_ninv(n) for n in miners_index}
         inv_names_to_fetch = [
             data["name"] for data in merged.values()
@@ -358,14 +367,9 @@ def main() -> None:
     _sl.main()
 
     # ── Phase 10.5: define miner set groups ──────────────────────────────
-    _set_groups_path = OUT_DIR / "set_groups.json"
-    if _set_groups_path.exists():
-        print("\n=== Phase 10.5: set groups already defined (skipped) ===")
-        print("  To redefine sets, run: python app/select_sets.py")
-    else:
-        print("\n=== Phase 10.5: define miner set groups ===")
-        import select_sets as _ss
-        _ss.main()
+    print("\n=== Phase 10.5: define miner set groups ===")
+    import select_sets as _ss
+    _ss.main()
 
     # ── Phase 11: run optimizer ───────────────────────────────────────────
     print("\n=== Phase 11: running optimizer ===")

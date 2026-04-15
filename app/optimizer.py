@@ -786,13 +786,35 @@ def main(dry_run: bool = False) -> None:
         return
 
     locked_set = load_locked()
+    set_groups = load_set_groups()
+
+    # Miners that belong to a set group are NOT hard-locked.
+    # Locking is used as a UI mechanism to define which miners are set members;
+    # the optimizer must still be free to swap them out when the set bonus doesn't
+    # justify keeping them.  Remove set members from the locked set so the
+    # optimizer can evaluate them on merit (raw power + whatever set bonus applies).
+    if locked_set and set_groups:
+        _raw_locked = json.loads(LOCKED_JSON.read_text(encoding="utf-8"))
+        _set_member_keys: set[tuple[int, int, str]] = {   # (room_idx, rack_idx, name_lower)
+            (sg["room"] - 1, sg["rack"], n.lower())
+            for sg in set_groups
+            for n in sg.get("member_names", [])
+        }
+        locked_set = {
+            (e["room"] - 1, e["rack"], e["miner_idx"])
+            for e in _raw_locked
+            if (e["room"] - 1, e["rack"], e["name"].lower()) not in _set_member_keys
+        }
+
     if locked_set:
-        print(f"Loaded {len(locked_set)} locked miner(s) from {LOCKED_JSON}")
+        print(f"Loaded {len(locked_set)} hard-locked miner(s) from {LOCKED_JSON}")
+    if set_groups:
+        _n_set_members = sum(len(sg.get("member_names", [])) for sg in set_groups)
+        print(f"Loaded {len(set_groups)} set group(s) ({_n_set_members} member miner(s)) — swappable by optimizer")
 
     original_placed = build_state(rooms, miners_db, locked_set)
     inv_pool = build_inventory_pool(inv_list, miners_db)
 
-    set_groups = load_set_groups()
     raw0, bonus0, eff0 = total_power(original_placed, set_groups)
     set_pct_0, set_raw_0 = (
         set_group_bonus([m.name.lower() for m in original_placed], set_groups)

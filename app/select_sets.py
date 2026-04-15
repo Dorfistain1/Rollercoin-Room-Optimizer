@@ -180,6 +180,24 @@ class RackSetEditor:
         self.rack_sets: dict[tuple[int, int], dict] = {}
         self._load_existing()
 
+        # For any locked rack NOT already in rack_sets (no saved data yet), auto-select
+        # all locked miners as set members.  Locking is done specifically because the
+        # miners form a set, so making them members by default removes the extra manual
+        # click and prevents accidental empty saves.
+        for (rn, rack_idx) in locked_rack_keys:
+            key = (rn, rack_idx)
+            if key in self.rack_sets:
+                continue  # already loaded from set_groups.json
+            ri = next((i for i, n in enumerate(self.room_nums) if n == rn), None)
+            if ri is None:
+                continue
+            rack = self.rooms[ri].get("racks", [])
+            if rack_idx >= len(rack):
+                continue
+            locked_idx = self.locked_miner_idx.get((rn, rack_idx), set())
+            member_names = [m["name"] for mi, m in enumerate(rack[rack_idx]) if mi in locked_idx]
+            self.rack_sets[key] = {"selected_names": member_names, "thresholds": []}
+
         self._thresh_vars: list[dict[str, tk.Variable]] = []
         self._photo = None
 
@@ -495,6 +513,14 @@ class RackSetEditor:
 
         for i, thresh in enumerate(thresholds):
             self._add_thresh_row(i, thresh)
+        # The thresh_frame sits inside a canvas whose scrollregion is updated via
+        # a <Configure> event on thresh_frame -- that event fires asynchronously.
+        # Force a synchronous update so rows added during __init__ are visible
+        # immediately when the window opens (not hidden by a zero scrollregion).
+        self.thresh_frame.update_idletasks()
+        self._thresh_canvas.configure(
+            scrollregion=self._thresh_canvas.bbox("all")
+        )
 
     def _add_thresh_row(self, idx: int, data: dict | None = None) -> None:
         row   = tk.Frame(self.thresh_frame, bg="#f5f5f5")
