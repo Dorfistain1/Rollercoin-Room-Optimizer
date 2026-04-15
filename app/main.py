@@ -51,6 +51,70 @@ from scrape_miners import lookup_miner, lookup_miner_by_slug, MATCH_LOG as _MATC
 from visualize_room import VIS_DIR, load_first_frame, render_one, find_all_placed
 
 
+# ── Download progress helper ──────────────────────────────────────────────────
+
+def _run_downloads(label: str, tasks: list, fetch_fn, desc_fn=None) -> None:
+    """
+    Run fetch_fn(task) for each task with a live two-line display:
+      Line 1: progress bar with % complete and ETA
+      Line 2: last status line from the scraper (updates in place)
+
+    fetch_fn receives the raw task item.
+    desc_fn(task) -> str  optional label shown on line 2 before each fetch.
+    """
+    from tqdm import tqdm as _tqdm
+
+    _orig = sys.stdout  # hold direct reference before any redirect
+
+    prog = _tqdm(
+        total=len(tasks),
+        desc=label,
+        unit="miner",
+        position=0,
+        leave=True,
+        file=_orig,
+        dynamic_ncols=True,
+        bar_format="{desc}: {percentage:3.0f}%|█{bar}█| {n}/{total} [{elapsed}<{remaining}]",
+    )
+    stat = _tqdm(
+        total=0,
+        bar_format="  {desc}",
+        position=1,
+        leave=False,
+        file=_orig,
+    )
+
+    class _Redirect:
+        """Intercepts scraper print() calls; feeds last line to stat bar."""
+        _buf = ""
+
+        def write(self, s):
+            self._buf += s
+            while "\n" in self._buf:
+                line, self._buf = self._buf.split("\n", 1)
+                clean = line.strip()
+                if clean:
+                    stat.set_description_str(clean[:120], refresh=True)
+            return len(s)
+
+        def flush(self):
+            pass
+
+    rd = _Redirect()
+    for task in tasks:
+        if desc_fn:
+            stat.set_description_str(desc_fn(task), refresh=True)
+        sys.stdout = rd
+        try:
+            fetch_fn(task)
+        finally:
+            sys.stdout = _orig
+        prog.update(1)
+
+    stat.close()
+    prog.close()
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def room_fingerprint(racks: list[list[dict]]) -> frozenset:
@@ -260,9 +324,13 @@ def main() -> None:
     ]
     if missing_room:
         print(f"\n=== Phase 3: downloading {len(missing_room)} missing room miner(s) ===")
-        for slug, name in missing_room:
-            print(f"Fetching '{name}' (slug: {slug})...")
-            lookup_miner_by_slug(slug, html_name=name)
+        _run_downloads(
+            label="Downloading",
+            tasks=missing_room,
+            fetch_fn=lambda t: lookup_miner_by_slug(t[0], html_name=t[1]),
+            desc_fn=lambda t: t[1],
+        )
+        print()  # blank line after bars clear
     else:
         print("\n=== Phase 3: all room miner images present ===")
 
@@ -320,9 +388,13 @@ def main() -> None:
         ]
         if inv_names_to_fetch:
             print(f"=== Phase 6: downloading {len(inv_names_to_fetch)} inventory-only miner(s) ===")
-            for name in sorted(inv_names_to_fetch):
-                print(f"Fetching '{name}'...")
-                lookup_miner(name, expected_name=name)
+            _run_downloads(
+                label="Downloading",
+                tasks=sorted(inv_names_to_fetch),
+                fetch_fn=lambda name: lookup_miner(name, expected_name=name),
+                desc_fn=lambda name: name,
+            )
+            print()  # blank line after bars clear
         else:
             print("=== Phase 6: all inventory miners already downloaded ===")
 

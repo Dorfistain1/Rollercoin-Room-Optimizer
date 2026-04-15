@@ -62,11 +62,16 @@ _POWER_UNITS: dict[str, float] = {
 
 
 def parse_power(text: str) -> float | None:
-    """Extract power and convert to TH/s. Handles GH, TH, PH, EH, MH, KH."""
+    """Extract power and convert to TH/s. Handles GH, TH, PH, EH, MH, KH.
+    Returns None for 0 values — the site uses '0 Th' as a placeholder for
+    rarity tiers that have no published data.
+    """
     m = re.search(r"([\d,]+(?:\.\d+)?)\s*([KMGTEП][Hh])", text, re.IGNORECASE)
     if not m:
         return None
     value = float(m.group(1).replace(",", ""))
+    if value == 0.0:
+        return None  # site placeholder; real miners never have 0 power
     unit = m.group(2).lower()
     multiplier = _POWER_UNITS.get(unit, 1.0)
     return value * multiplier
@@ -175,8 +180,15 @@ def fetch_miner_by_game_slug(game_slug: str) -> dict | None:
         common_power, common_bonus = parse_power_bonus(els)
         rarities["common"] = {"power_th": common_power, "bonus_pct": common_bonus}
 
-    dropdown = soup.find(
-        lambda tag: tag.has_attr("class") and "brxe-elnjof" in tag["class"]
+    dropdown_ul = soup.find(
+        lambda tag: tag.has_attr("class") and "brxe-pbvklb" in tag["class"]
+    )
+    dropdown = (
+        dropdown_ul.find(
+            lambda tag: tag.has_attr("class") and "brxe-elnjof" in tag["class"]
+        )
+        if dropdown_ul
+        else None
     )
     if dropdown:
         pairs = extract_rarity_pairs(dropdown)
@@ -256,33 +268,34 @@ def parse_power_bonus(elements) -> tuple[float | None, float | None]:
 
 def extract_rarity_pairs(container) -> list[tuple[float | None, float | None]]:
     """
-    Extract ordered (power_th, bonus_pct) pairs from *container*.
+    Extract ordered (power_th, bonus_pct) pairs from *container* (brxe-elnjof).
 
-    Strategy A: the container holds N sub-blocks each with class 'brxe-keyive'
-    and each block contains one 'brxe-tdjxgn' with Th and one with %.
+    The container's direct children are the 5 rarity-tier groups (uncommon →
+    unreal), each holding exactly 2 brxe-text-basic elements: power and bonus.
+    Class names of those child divs differ per tier (brxe-keyive, brxe-qdbdff,
+    brxe-qddzks, brxe-sjluxx, brxe-ylbuzw) so we rely on position, not name.
 
-    Strategy B (fallback): collect ALL 'brxe-tdjxgn' leaf elements from the
-    container (regardless of nesting), then pair them up in document order
-    as (Th-value, %-value) pairs.
+    Fallback: if the direct-children strategy yields < 5 pairs, collect ALL
+    brxe-text-basic leaf elements and pair them up in document order.
     """
-    # Strategy A – try named rarity blocks first (brxe-keyive wraps each rarity)
-    rarity_blocks = container.find_all(
-        lambda tag: tag.has_attr("class") and "brxe-keyive" in tag["class"]
-    )
-    if len(rarity_blocks) >= 5:
-        pairs = []
-        for block in rarity_blocks[:5]:
-            els = block.find_all(
-                lambda tag: tag.has_attr("class") and "brxe-text-basic" in tag["class"]
-            )
+    # Primary: each direct child of brxe-elnjof is one rarity group
+    pairs = []
+    for child in container.find_all(recursive=False):
+        if not child.has_attr("class"):
+            continue
+        els = child.find_all(
+            lambda tag: tag.has_attr("class") and "brxe-text-basic" in tag["class"]
+        )
+        if els:
             pairs.append(parse_power_bonus(els))
-        return pairs
 
-    # Strategy B – flatten all brxe-text-basic elements and pair them up
+    if len(pairs) >= 5:
+        return pairs[:5]
+
+    # Fallback – flatten all brxe-text-basic leaf elements and pair them up
     all_els = container.find_all(
         lambda tag: tag.has_attr("class") and "brxe-text-basic" in tag["class"]
     )
-    # Filter only leaf-level elements (no brxe-text-basic children)
     leaves = [
         el for el in all_els
         if not el.find(lambda t: t.has_attr("class") and "brxe-text-basic" in t["class"])
@@ -292,11 +305,13 @@ def extract_rarity_pairs(container) -> list[tuple[float | None, float | None]]:
     pending_power = None
     for el in leaves:
         text = el.get_text(strip=True)
-        if "Th" in text:
+        if re.search(r"[KMGTEП][Hh]", text, re.IGNORECASE):
             pending_power = parse_power(text)
         elif "%" in text:
             pairs.append((pending_power, parse_bonus(text)))
             pending_power = None
+
+    return pairs
 
     return pairs
 
@@ -379,7 +394,11 @@ def _parse_filter_sidebar(soup) -> dict[str, float]:
 # ---------------------------------------------------------------------------
 
 def fetch_with_retry(url: str, retries: int = 4, backoff: float = 5.0) -> requests.Response | None:
-    """GET *url* with up to *retries* attempts and exponential backoff."""
+    """GET *url* with up to *retries* attempts and exponential backoff.
+    404 Not Found is treated as permanent — only 2 attempts are made before
+    giving up immediately (no point waiting for a page that doesn't exist).
+    """
+    import requests as _req
     session = requests.Session()
     session.headers.update(HEADERS)
     delay = backoff
@@ -388,6 +407,16 @@ def fetch_with_retry(url: str, retries: int = 4, backoff: float = 5.0) -> reques
             r = session.get(url, timeout=25)
             r.raise_for_status()
             return r
+        except _req.exceptions.HTTPError as exc:
+            status = exc.response.status_code if exc.response is not None else None
+            print(f"  [Attempt {attempt}/{retries}] Error: {exc}")
+            if status == 404:
+                if attempt >= 2:
+                    break  # 404 is permanent — stop after 2 tries
+            if attempt < retries:
+                print(f"  Retrying in {delay:.0f}s...")
+                time.sleep(delay)
+                delay *= 2
         except Exception as exc:
             print(f"  [Attempt {attempt}/{retries}] Error: {exc}")
             if attempt < retries:
@@ -533,9 +562,17 @@ def scrape_page(url: str, download_images: bool = True) -> list[dict]:
         }
 
         # ── Other rarities (inside the dropdown) ────────────────────────────
-        # Dropdown container class: brxe-elnjof
-        dropdown = card.find(
-            lambda tag: tag.has_attr("class") and "brxe-elnjof" in tag["class"]
+        # Anchor on brxe-pbvklb (the dropdown UL), then find brxe-elnjof inside it.
+        # This matches the documented page structure from Miners – Piero.html.
+        dropdown_ul = card.find(
+            lambda tag: tag.has_attr("class") and "brxe-pbvklb" in tag["class"]
+        )
+        dropdown = (
+            dropdown_ul.find(
+                lambda tag: tag.has_attr("class") and "brxe-elnjof" in tag["class"]
+            )
+            if dropdown_ul
+            else None
         )
         if dropdown:
             # extract_rarity_pairs tries multiple strategies to get 5 pairs
@@ -722,63 +759,82 @@ def _norm_stem(s: str) -> str:
 
 def _search_progressive(slug: str) -> dict | None:
     """
-    Find a miner whose image filename stem matches *slug* by progressively
-    lengthening the search query one letter at a time.
+    Two-phase progressive search — always via the listing search endpoint so
+    that full per-rarity data is returned (individual miner detail pages only
+    have Basic/common data).  Images are NOT downloaded for non-matching results.
 
-    Strategy:
-      slug = "freoner"  →  query_base = "freoner"
-      Round 1: search "f" → scan results for image stem == target
-      Round 2: search "fr"
-      Round 3: search "fre" ... until found or all letters exhausted.
+    Phase 1 — word-by-word:
+      Build the query by adding one word at a time ("BTC" → "BTC Bull").
+      Stop immediately if a query returns 0 results and switch to Phase 2.
 
-    Images are NOT downloaded for non-matching search results; only the
-    matched miner's image is saved to disk.
+    Phase 2 — letter-by-letter:
+      Extend the full query string one character at a time.
+      Stop immediately if a query returns 0 results.
     """
-    # Build a human-readable search string (underscores/hyphens → spaces)
     query_base = slug.replace("-", "_").replace("_", " ").strip()
     target = _norm_stem(slug)
+    words = query_base.split()
 
-    prev_count = -1  # track when result set changes
-    for length in range(1, len(query_base) + 1):
-        query = query_base[:length]
+    def _try_search(query: str) -> list[dict]:
         url = f"{BASE_URL}?search={requests.utils.quote(query)}"
-        results = scrape_page(url, download_images=False)
-        count = len(results)
+        return scrape_page(url, download_images=False)
 
-        # Only print when the result count changes (avoid spamming identical pages)
-        if count != prev_count:
-            if count:
-                print(f"  [{length}/{len(query_base)}] {query!r} -> {count} result(s), first: {results[0]['name']!r}")
-            else:
-                print(f"  [{length}/{len(query_base)}] {query!r} -> no results")
-        prev_count = count
-
-        # Check for exact image-stem match first
-        matched = None
+    def _find_match(results: list[dict]) -> dict | None:
         for rec in results:
             img_stem = _norm_stem(re.sub(r"\.\w+$", "", rec.get("image", "")))
             if img_stem == target:
-                print(f"  Matched: {rec['name']!r} (image slug matches)")
-                matched = rec
-                break
+                print(f"  Matched: {rec['name']!r} (image slug)")
+                return rec
+        if len(results) == 1:
+            print(f"  Matched: {results[0]['name']!r} (single result)")
+            return results[0]
+        return None
 
-        # If search has narrowed to a single result, trust it — the progressive
-        # narrowing already uniquely identifies the miner (handles cases like
-        # "Declarator 407+" where the image stem can't round-trip the slug).
-        if matched is None and len(results) == 1:
-            print(f"  Matched: {results[0]['name']!r} (single result — unique match)")
-            matched = results[0]
+    def _finalize(rec: dict) -> dict:
+        img_url = rec.pop("_img_url", None)
+        if img_url:
+            img_path = os.path.join(MINERS_DIR, rec["image"])
+            if not os.path.exists(img_path):
+                os.makedirs(MINERS_DIR, exist_ok=True)
+                print(f"    Downloading image: {rec['image']}")
+                download_image(img_url, img_path)
+        return rec
 
-        if matched is not None:
-            img_url = matched.pop("_img_url", None)
-            if img_url:
-                img_path = os.path.join(MINERS_DIR, matched["image"])
-                if not os.path.exists(img_path):
-                    os.makedirs(MINERS_DIR, exist_ok=True)
-                    print(f"    Downloading image: {matched['image']}")
-                    download_image(img_url, img_path)
-            return matched
+    # ── Phase 1: word-by-word ─────────────────────────────────────────────────
+    print(f"  Word-by-word search ({len(words)} word(s))...")
+    for n in range(1, len(words) + 1):
+        query = " ".join(words[:n])
+        results = _try_search(query)
+        count = len(results)
+        first = results[0]["name"] if results else "—"
+        print(f"  [word {n}/{len(words)}] {query!r} → {count} result(s)" +
+              (f", first: {first!r}" if count else ""))
+        if count == 0:
+            print(f"  Word search returned 0 — switching to letter search")
+            break
+        match = _find_match(results)
+        if match:
+            return _finalize(match)
+        time.sleep(0.5)
 
+    # ── Phase 2: letter-by-letter ─────────────────────────────────────────────
+    print(f"  Letter-by-letter search ({len(query_base)} char(s))...")
+    prev_count = -1
+    for length in range(1, len(query_base) + 1):
+        query = query_base[:length]
+        results = _try_search(query)
+        count = len(results)
+        if count != prev_count:
+            first = results[0]["name"] if results else "—"
+            print(f"  [char {length}/{len(query_base)}] {query!r} → {count} result(s)" +
+                  (f", first: {first!r}" if count else ""))
+        prev_count = count
+        if count == 0:
+            print(f"  Letter search returned 0 at length {length} — giving up")
+            break
+        match = _find_match(results)
+        if match:
+            return _finalize(match)
         time.sleep(0.5)
 
     return None
@@ -831,16 +887,11 @@ def lookup_miner(name: str, expected_name: str = "", log_slug: str | None = None
                 download_image(img_url, img_path)
 
     if match is None:
-        # Progressive search using slug words
-        print(f"  Exact match failed — trying progressive slug search...")
+        # Progressive search: word-by-word then letter-by-letter
+        # Always via the search endpoint — the detail page only has Basic (common)
+        # power and no per-rarity breakdown.
+        print(f"  Exact match failed — trying progressive search...")
         match = _search_progressive(_norm_stem(name))
-        if match:
-            used_secondary = True
-
-    if match is None:
-        # Last resort: hit the detail page directly using the name as slug
-        print(f"  Progressive search failed — trying direct detail page...")
-        match = fetch_miner_by_game_slug(_norm_stem(name).replace("_", "-"))
         if match:
             used_secondary = True
 
@@ -929,35 +980,11 @@ def lookup_miner_by_slug(slug: str, html_name: str = "") -> dict | None:
     display = " ".join(w.capitalize() for w in slug.split("_"))
     effective_html = html_name or display
 
-    # ── Strategy 1: direct detail page (fastest, least likely to be blocked) ──
-    # We already have the slug, so try the detail URL before any search queries.
-    print(f"  Trying direct page for '{slug}'...")
-    match = fetch_miner_by_game_slug(slug)
-    if match and match.get("rarities", {}).get("common", {}).get("power_th"):
-        # Got usable data — check for name mismatch and save
-        if _norm_stem(match["name"]) != _norm_stem(effective_html):
-            _log_match(slug, effective_html, match["name"], match)
-            print(f"  [!] Name mismatch flagged for verification: '{effective_html}' -> '{match['name']}'")
-        existing: list[dict] = []
-        if os.path.exists(OUTPUT_JSON):
-            with open(OUTPUT_JSON, encoding="utf-8") as f:
-                existing = json.load(f)
-        lower_map = {m["name"].lower(): i for i, m in enumerate(existing)}
-        idx = lower_map.get(match["name"].lower())
-        if idx is not None:
-            existing[idx] = match
-            print(f"  Updated existing entry in {OUTPUT_JSON}")
-        else:
-            existing.append(match)
-            print(f"  Added new entry to {OUTPUT_JSON}")
-        save_json(existing)
-    else:
-        # Direct page failed or returned no power data — fall back to search
-        if match is not None:
-            print(f"  Direct page gave no power data — falling back to search...")
-        match = lookup_miner(display, expected_name=effective_html, log_slug=slug)
-        if match is None:
-            return None
+    # Always search first — the individual miner detail page only has Basic
+    # (common-rarity) power; per-rarity data is only on the listing search page.
+    match = lookup_miner(display, expected_name=effective_html, log_slug=slug)
+    if match is None:
+        return None
 
     # Ensure the image lives under the game-slug filename so that
     # load_first_frame(slug) always finds it on the first exact-match attempt.

@@ -224,12 +224,9 @@ def miner_stats(name: str, power_th: float | None, bonus_pct: float | None,
         tier = rarities[rarity]
         p = power_th if power_th is not None else tier.get("power_th")
         b = bonus_pct if bonus_pct is not None else (tier.get("bonus_pct") or 0.0)
-        # If this rarity tier has no power data, fall back to common
-        if p is None:
-            p = (rarities.get("common") or {}).get("power_th") or 0.0
         return p or 0.0, b
 
-    # No rarity info — pick the best available tier as a safe estimate
+    # No rarity info — pick the best available tier
     best_p, best_b = power_th or 0.0, bonus_pct or 0.0
     found = False
     for tier in rarities.values():

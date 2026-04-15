@@ -11,8 +11,9 @@ output/!.gitkeep
 vis/*
 vis/!.gitkeep
 
-# full miner list from minaryganar.com
+# dev data
 /fullminerlist - legacy/
+/temp/
 
 __pycache__/
 

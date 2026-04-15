@@ -469,28 +469,6 @@ class VerifyWindow:
         tk.Label(manual_row, text="  Cells:", bg=bg, font=("Arial", 8)).pack(side=tk.LEFT)
         tk.OptionMenu(manual_row, cell_var, "1", "2").pack(side=tk.LEFT, padx=(2, 0))
 
-        def _apply_manual(i=idx, pv=pwr_var, bv=bon_var, cv=cell_var) -> None:
-            try:
-                pwr = float(pv.get().replace(",", ".") or "0")
-                self.entries[i]["manual_power_th"] = pwr if pwr > 0 else None
-            except ValueError:
-                self.entries[i]["manual_power_th"] = None
-            try:
-                bon = float(bv.get().replace(",", ".") or "0")
-                self.entries[i]["manual_bonus_pct"] = bon if bon > 0 else None
-            except ValueError:
-                self.entries[i]["manual_bonus_pct"] = None
-            try:
-                self.entries[i]["manual_cells"] = int(cv.get())
-            except (ValueError, KeyError):
-                self.entries[i]["manual_cells"] = 2
-
-        tk.Button(
-            manual_row, text="✓ Apply", bg="#27ae60", fg="white",
-            font=("Arial", 9, "bold"), relief=tk.FLAT, padx=6, pady=1,
-            command=_apply_manual,
-        ).pack(side=tk.LEFT, padx=(8, 0))
-
         def _show_manual(show: bool, row=manual_row) -> None:
             if show:
                 row.grid()

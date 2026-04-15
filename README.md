@@ -50,7 +50,7 @@ pip install -r requirements.txt
 ### 1 — Save your room pages from the browser
 
 1. Open your RollerCoin room in edit view in Chrome. (The page that looks like this: ![Room page preview](room_edit_view.png))
-2. Press `Ctrl+S` (or `Cmd+S` on Mac) to save the page as HTML. Save the file directly into the `html_page/` folder.
+2. Press `Ctrl+S` (or `Cmd+S` on Mac) to save the page as HTML. Save the file directly into a folder named `html_page/`.
 3. Repeat for each room.
 
 > Filenames don't matter — rooms are numbered in alphabetical order of filename.
@@ -58,11 +58,14 @@ pip install -r requirements.txt
 ### 1b — Save your inventory pages
 
 1. Open your RollerCoin room in edit view in a browser and open the inventory (miners) tab.
+   ![Inventory page preview](inventory_preview.png)
 
 2. Sort by `Power` or `Bonus` (High to Low).
 3. Press `Ctrl+S` (or `Cmd+S` on Mac) to save the inventory page into `html_page/`.
-4. Scroll right until the loading icon appears, then save again to capture the next chunk. Repeat as needed.
-5. Repeat for the other sort order if you want both views (recommended).
+4. Scroll right until the loading icon appears
+   ![Inventory loading icon preview](inventory_loading_icon.png)
+5. save again to capture the next chunk. Repeat as needed.
+6. Repeat for the other sort order if you want both views (recommended).
 
 > Saving the first two pages per sort order is usually enough.
 
