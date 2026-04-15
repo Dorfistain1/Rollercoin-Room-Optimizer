@@ -358,9 +358,14 @@ def main() -> None:
     _sl.main()
 
     # ── Phase 10.5: define miner set groups ──────────────────────────────
-    print("\n=== Phase 10.5: define miner set groups ===")
-    import select_sets as _ss
-    _ss.main()
+    _set_groups_path = OUT_DIR / "set_groups.json"
+    if _set_groups_path.exists():
+        print("\n=== Phase 10.5: set groups already defined (skipped) ===")
+        print("  To redefine sets, run: python app/select_sets.py")
+    else:
+        print("\n=== Phase 10.5: define miner set groups ===")
+        import select_sets as _ss
+        _ss.main()
 
     # ── Phase 11: run optimizer ───────────────────────────────────────────
     print("\n=== Phase 11: running optimizer ===")
@@ -368,9 +373,13 @@ def main() -> None:
     _opt.main()
 
     # ── Phase 12: visualise swaps ───────────────────────────────────────
-    print("\n=== Phase 12: visualising swaps ===")
-    import vis_swaps as _vs
-    _vs.main()
+    _swaps_path = OUT_DIR / "optimizer_swaps.json"
+    if _swaps_path.exists():
+        print("\n=== Phase 12: visualising swaps ===")
+        import vis_swaps as _vs
+        _vs.main()
+    else:
+        print("\n=== Phase 12: skipped (no swaps to visualise) ===")
 
     # ── Phase 13: cleanup ─────────────────────────────────────────────────
     print()

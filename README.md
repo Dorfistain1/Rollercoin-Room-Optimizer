@@ -123,24 +123,28 @@ After showing the current state the optimizer asks for the actual total bonus % 
 
 ## Resetting for a new run
 
-When you want to start fresh with new room saves, run the reset script to wipe all generated data:
+When you want to start fresh with new room saves, run the reset script:
 
 ```bash
 python app/reset.py
 ```
 
 This deletes:
-- `data/*.json` — parsed rooms, inventory, swap plan, lock list, match log, set-bonus offset
+- `data/*.json` — parsed rooms, inventory, swap plan, lock list, set groups, match log, set-bonus offset
 - `vis/*.png` — room visualizations
 - `output/*.png` — swap visualizations
 - `html_page/*.html` — saved game pages
-- `miners/` — all downloaded miner images and `miners_data.json`
 
-**If your rooms haven't changed much** (most of the same miners are still there), use the `--keep-miners` flag to skip re-downloading images and stats:
+**Miner images and `miners/miners_data.json` are kept by default.** Re-downloading all miners every run wastes time when most of your rooms are unchanged — the existing data is reused automatically on the next run.
+
+If you've added many new miners and want a complete wipe, pass `--all`:
 
 ```bash
-python app/reset.py --keep-miners
+python app/reset.py --all
 ```
+
+This additionally deletes:
+- `miners/` — all downloaded miner images and `miners_data.json`
 
 After resetting, drop your new `.html` pages into `html_page/` and run `python app/main.py` as normal.
 

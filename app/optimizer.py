@@ -135,7 +135,9 @@ def set_group_bonus(
         members_lower = {n.lower() for n in sg.get("member_names", [])}
         count = sum(1 for n in placed_names if n in members_lower)
         for threshold in sg.get("thresholds", []):
-            if count >= threshold["count"]:
+            # Support both key names for backwards compatibility
+            min_m = threshold.get("min_members") or threshold.get("count", 0)
+            if count >= min_m:
                 if threshold.get("type") == "pct":
                     extra_pct += threshold["value"]
                 else:  # raw_th
@@ -807,7 +809,7 @@ def main(dry_run: bool = False) -> None:
         for sg in set_groups:
             mbrs   = {n.lower() for n in sg.get("member_names", [])}
             cnt    = sum(1 for n in pnames0 if n in mbrs)
-            active = sum(1 for t in sg.get("thresholds", []) if cnt >= t["count"])
+            active = sum(1 for t in sg.get("thresholds", []) if cnt >= (t.get("min_members") or t.get("count", 0)))
             print(f"  Set '{sg['name']}': {cnt}/{len(mbrs)} members, "
                   f"{active} tier(s) active")
         if set_pct_0:

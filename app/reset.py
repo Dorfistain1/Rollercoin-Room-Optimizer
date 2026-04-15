@@ -1,22 +1,18 @@
 """
 reset.py — Delete all generated data and return the project to a clean state.
 
-By default this removes EVERYTHING that main.py produces:
-  • data/*.json          — parsed rooms, inventory, swaps, locks, match log, set bonus
-  • vis/*.png            — room visualizations
-  • output/*.png         — swap visualizations
-  • html_page/*.html     — saved game pages
-  • miners/*.gif / *.png — downloaded miner images
-  • miners/miners_data.json — scraped miner stats
+By default this keeps miners/ (images and miners_data.json) so they don't
+need to be re-downloaded on the next run — most re-runs only change part of
+the rooms, so the existing miner data is still valid.
 
 Optional flags:
-  --keep-miners   Keep miners/ images and miners_data.json.
-                  Useful when your rooms are mostly the same — the images
-                  will be reused on the next run without re-downloading.
+  --all   Also delete miners/ images and miners_data.json (full wipe).
+          Use this only when you've swapped in many new miners and want a
+          completely fresh download.
 
 Usage (from the roomBuilder/ directory):
-  python app/reset.py                # full reset
-  python app/reset.py --keep-miners  # keep downloaded miner images & data
+  python app/reset.py        # reset data/vis/output/html_page, keep miners
+  python app/reset.py --all  # full reset including miners/ images & data
 """
 
 import sys
@@ -34,6 +30,7 @@ _DATA_FILES = [
     _ROOT / "data/match_log.json",
     _ROOT / "data/optimizer_swaps.json",
     _ROOT / "data/set_bonus.json",
+    _ROOT / "data/set_groups.json",
 ]
 _DATA_GLOB_PATTERNS = [
     ("data", "placed_room*.json"),
@@ -76,14 +73,14 @@ def _clear_dir_contents(d: Path) -> int:
 
 
 def main() -> None:
-    keep_miners = "--keep-miners" in sys.argv
+    delete_miners = "--all" in sys.argv
 
     print("RollerCoin Room Builder — Reset")
     print("=" * 40)
-    if keep_miners:
-        print("Mode: keep miners/ images and miners_data.json\n")
+    if delete_miners:
+        print("Mode: full reset (all generated files including miners/)\n")
     else:
-        print("Mode: full reset (all generated files)\n")
+        print("Mode: reset data/vis/output/html_page — miners/ kept (use --all to also wipe miners)\n")
 
     total_removed = 0
 
@@ -108,13 +105,13 @@ def main() -> None:
             total_removed += n
 
     # ── miners/ ───────────────────────────────────────────────────────────
-    if keep_miners:
-        print(f"  Kept     miners/  (--keep-miners)")
-    else:
+    if delete_miners:
         n = _clear_dir_contents(_MINERS_DIR)
         if n:
             print(f"  Cleared  miners/  ({n} item{'s' if n != 1 else ''})")
             total_removed += n
+    else:
+        print(f"  Kept     miners/  (pass --all to also wipe miners)")
 
     print()
     if total_removed:
