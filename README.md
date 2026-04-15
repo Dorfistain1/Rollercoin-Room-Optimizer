@@ -4,13 +4,14 @@ Scrapes your [RollerCoin](https://rollercoin.com/?r=kyaf3h0b) rooms from saved H
 
 | Script | Purpose |
 |---|---|
-| `app/main.py` | **Start here.** Runs the full 12-phase pipeline in one command. |
+| `app/main.py` | **Start here.** Runs the full pipeline in one command. |
 | `app/parse_room.py` | Parses room HTML pages into structured rack JSON. |
 | `app/scrape_miners.py` | Fetches miner data and images from [minaryganar.com](https://minaryganar.com). |
 | `app/visualize_room.py` | Renders rack JSON into PNG images. |
 | `app/optimizer.py` | Greedy optimizer — finds the best inventory swaps to maximise power. |
 | `app/vis_swaps.py` | Renders the swap plan as an annotated room image. |
-| `app/select_locked.py` | Interactive UI to mark placed miners as locked (won't be swapped). |
+| `app/select_locked.py` | UI to mark miners as belonging to a set rack (used by the set-group step). |
+| `app/select_sets.py` | UI to define set bonus thresholds for each locked rack. |
 | `app/verify_matches.py` | UI to confirm or reject auto-matched miner names. |
 | `app/refetch_missing.py` | Re-fetches miners whose power/bonus data is missing. |
 | `app/reset.py` | Deletes all generated data and returns the project to a clean state. |
@@ -84,9 +85,10 @@ The pipeline runs automatically:
 | 5–7 | Merges inventory pages, downloads missing inventory miners, saves `data/inventory.json` |
 | 8 | Renders each room → `vis/room*.png` |
 | 9 | Opens verification UI for any unconfirmed miner name matches |
-| 10 | Opens UI to lock miners you don't want swapped (usually for set bonuses) |
+| 10 | Opens UI to mark miners that belong to a set rack |
+| 10.5 | Opens UI to define set bonus thresholds for each locked rack |
 | 11 | Runs the optimizer, prints the swap plan, saves `data/optimizer_swaps.json` |
-| 12 | Renders swap plan → `output/swaps_room*.png` |
+| 12 | Renders swap plan → `output/swaps_room*.png` (skipped if no swaps found) |
 | 13 | Cleans up `_files/` folders left by the browser in `html_page/` |
 
 Final swap visualizations are written to `output/swaps_room*.png` (one file per room). Open the `output/` folder to view the rendered swap plans after the pipeline completes.
@@ -100,7 +102,8 @@ Final swap visualizations are written to `output/swaps_room*.png` (one file per 
 | `data/placed_room*.json` | Rack-grouped miner data per room |
 | `data/inventory.json` | Merged inventory sorted by power |
 | `data/optimizer_swaps.json` | Swap plan produced by the optimizer |
-| `data/locked.json` | List of locked miner positions |
+| `data/locked.json` | List of miners marking set racks |
+| `data/set_groups.json` | Set bonus thresholds per rack |
 | `data/match_log.json` | Verified miner name mappings |
 | `vis/room*.png` | Rendered room visualizations |
 | `output/swaps_room*.png` | Swap plan visualizations |
@@ -115,9 +118,13 @@ Each column is one rack. Miners are stacked top-to-bottom, racks left-to-right i
 
 Each swap is outlined in a unique colour with a numbered badge. The legend strip below the room shows the miner(s) being removed → the miner(s) being added, alongside the effective-power gain. Swaps that change slot size (2-cell ↔ pair) show a **place PAIR** or **place 2-CELL** hint.
 
-### Optimizer — set bonus
+### Optimizer — set bonus offset
 
 After showing the current state the optimizer asks for the actual total bonus % shown in-game. Enter it once and the offset is saved to `data/set_bonus.json` and reused on every subsequent run.
+
+### Set groups
+
+Miners marked in Phase 10 are treated as potential set members, not as hard-locked miners. The optimizer is free to swap them out if they don't justify their slots individually. Phase 10.5 lets you define per-rack thresholds: e.g. "if ≥ 4 members are placed, add +15% bonus". The optimizer uses these thresholds when scoring swaps so it keeps the set together when the bonus outweighs the individual power cost.
 
 ---
 
@@ -215,6 +222,12 @@ python app/vis_swaps.py 2      # room 2 only
 
 ```bash
 python app/select_locked.py
+```
+
+### select_sets.py
+
+```bash
+python app/select_sets.py
 ```
 
 ---
