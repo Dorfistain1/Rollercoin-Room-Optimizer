@@ -87,6 +87,7 @@ def _render_room(
     locked_indices: set[int],
     selected_names: set[str],
     set_rack_indices: set[int],
+    locked_per_rack: dict[int, set[int]] | None = None,
 ) -> Image.Image:
     """
     Render the full room with per-miner highlight overlays.
@@ -95,22 +96,31 @@ def _render_room(
     locked_indices   -- miner_idx values within active_rack_idx that are locked
     selected_names   -- names of locked miners chosen for the set
     set_rack_indices -- rack_idx values (other than active) that already have sets
+    locked_per_rack  -- {rack_idx: set[miner_idx]} for other racks (limits overlay to locked cells only)
     """
     from visualize_room import render as _render
     base    = _render(racks).convert("RGBA")
     overlay = Image.new("RGBA", base.size, (0, 0, 0, 0))
     draw    = ImageDraw.Draw(overlay)
 
-    # Faint green column for other racks that have a set
+    # Faint green overlay for locked miners in other racks that have a set
     for rack_idx, rack in enumerate(racks):
         if rack_idx == active_rack_idx or rack_idx not in set_rack_indices:
             continue
-        bbox = _rack_bbox(rack_idx, len(rack))
-        if bbox:
-            draw.rectangle([bbox[0], bbox[1], bbox[2]-1, bbox[3]-1],
-                           fill=_COLOR_OTHER_SET)
-            draw.text((bbox[0] + CELL_W // 2, bbox[1] + 4), "SET",
-                      fill=(255, 255, 255, 180), anchor="mt", font=_FONT)
+        other_locked = sorted((locked_per_rack or {}).get(rack_idx, set()))
+        drawn = 0
+        for miner_idx in other_locked:
+            if miner_idx >= len(rack):
+                continue
+            x0, y0, x1, y1 = _miner_bbox(rack_idx, miner_idx)
+            draw.rectangle([x0, y0, x1-1, y0 + CELL_H - 1], fill=_COLOR_OTHER_SET)
+            drawn += 1
+        if drawn:
+            # Label on the first highlighted cell
+            first_idx = next(mi for mi in other_locked if mi < len(rack))
+            lx0, ly0, lx1, _ = _miner_bbox(rack_idx, first_idx)
+            draw.text(((lx0 + lx1) // 2, ly0 + 4), "SET",
+                      fill=(255, 255, 255, 200), anchor="mt", font=_FONT)
 
     # Per-miner highlight within the active rack (locked miners only)
     active_rack = racks[active_rack_idx] if active_rack_idx < len(racks) else []
@@ -152,7 +162,7 @@ class RackSetEditor:
         #   locked_miner_idx[(room_num, rack_idx)] = set of miner_idx that are locked
         #   locked_rack_keys = which (room_num, rack_idx) pairs have any locked miner
         self.locked_miner_idx: dict[tuple[int, int], set[int]] = {}
-        locked_rack_keys: set[tuple[int, int]] = set()
+        self._locked_rack_keys: set[tuple[int, int]] = set()
         if LOCKED_JSON.exists():
             try:
                 for entry in json.loads(LOCKED_JSON.read_text(encoding="utf-8")):
@@ -160,7 +170,7 @@ class RackSetEditor:
                     rik = entry.get("rack")
                     mi  = entry.get("miner_idx")
                     if rn is not None and rik is not None:
-                        locked_rack_keys.add((rn, rik))
+                        self._locked_rack_keys.add((rn, rik))
                         if mi is not None:
                             self.locked_miner_idx.setdefault((rn, rik), set()).add(mi)
             except Exception:
@@ -171,7 +181,7 @@ class RackSetEditor:
         for ri, room in enumerate(self.rooms):
             rn = self.room_nums[ri]
             for rack_idx in range(len(room.get("racks", []))):
-                if (rn, rack_idx) in locked_rack_keys:
+                if (rn, rack_idx) in self._locked_rack_keys:
                     self.all_racks.append((ri, rack_idx))
 
         self.cur: int = 0
@@ -184,7 +194,7 @@ class RackSetEditor:
         # all locked miners as set members.  Locking is done specifically because the
         # miners form a set, so making them members by default removes the extra manual
         # click and prevents accidental empty saves.
-        for (rn, rack_idx) in locked_rack_keys:
+        for (rn, rack_idx) in self._locked_rack_keys:
             key = (rn, rack_idx)
             if key in self.rack_sets:
                 continue  # already loaded from set_groups.json
@@ -234,6 +244,9 @@ class RackSetEditor:
             rn     = sg.get("room")
             ri_key = sg.get("rack")
             if rn is None or ri_key is None:
+                continue
+            # Skip entries for racks that are no longer locked in locked.json
+            if (rn, ri_key) not in self._locked_rack_keys:
                 continue
             self.rack_sets[(rn, ri_key)] = {
                 "selected_names": list(sg.get("member_names", [])),
@@ -487,8 +500,9 @@ class RackSetEditor:
         locked = self.locked_miner_idx.get((rn, rack_idx), set())
         sel    = self._cur_selected_names()
         other  = self._set_rack_indices_for_room(ri) - {rack_idx}
+        locked_per_rack = {k: v for (r, k), v in self.locked_miner_idx.items() if r == rn}
 
-        img = _render_room(racks, rack_idx, locked, sel, other)
+        img = _render_room(racks, rack_idx, locked, sel, other, locked_per_rack)
         self._photo = ImageTk.PhotoImage(img)
         self.canvas.delete("all")
         self.canvas.create_image(0, 0, anchor=tk.NW, image=self._photo)
@@ -585,6 +599,9 @@ class RackSetEditor:
 
         result = []
         for (room_num, rack_idx), data in sorted(self.rack_sets.items()):
+            # Drop entries for racks that were unlocked since last run
+            if (room_num, rack_idx) not in self._locked_rack_keys:
+                continue
             selected_names = data.get("selected_names", [])
             thresholds     = data.get("thresholds", [])
             if not selected_names or not thresholds:
