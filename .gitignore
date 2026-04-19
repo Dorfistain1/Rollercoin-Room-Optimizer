@@ -12,7 +12,7 @@ vis/*
 vis/!.gitkeep
 
 # dev data
-/fullminerlist - legacy/
+/fullminerlist/
 /temp/
 
 __pycache__/

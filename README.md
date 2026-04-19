@@ -71,6 +71,22 @@ pip install -r requirements.txt
 
 **How the pipeline detects inventory pages:** if your rooms are all unique it figures it out automatically. If you have pages that might be ambiguous (very unlikely), name inventory files with a `power` or `bonus` prefix (e.g. `power1.html`, `bonus.html`) to force the classification.
 
+### 1c — (Optional) Save a 1-cell-only inventory page
+
+This is **totally optional and usually not needed**. It can help in edge cases where the optimizer struggles to fill leftover 1-cell gaps, because it gives it an explicit pool of only 1-cell miners to choose from.
+
+1. Open the inventory modal and **filter for 1-cell miners only** (use the game's cell-count filter).
+2. Sort by `Power` or `Bonus` (High to Low).
+3. Save the page into `html_page/` and **name it using the 1-cell convention**:
+
+| Sorted by | Filename examples |
+|---|---|
+| Power | `power1cell.html`, `power1cell1.html`, `power1cell2.html` … |
+| Bonus | `bonus1cell.html`, `bonus1cell1.html`, `bonus1cell2.html` … |
+
+> The pipeline detects these files automatically by name, validates that every miner inside is actually 1 cell, and saves the result to `data/inventory_1cell.json`.
+> A warning is printed for any miner found to occupy more than 1 cell — check your filter if that happens.
+
 ### 2 — Run
 
 ```bash
@@ -86,6 +102,7 @@ The pipeline runs automatically:
 | 3 | Downloads missing room miner images + stats |
 | 4 | Re-parses rooms with fresh data for accurate names |
 | 5–7 | Merges inventory pages, downloads missing inventory miners, saves `data/inventory.json` |
+| 7b | *(optional)* Validates 1-cell inventory pages, saves `data/inventory_1cell.json` |
 | 8 | Renders each room → `vis/room*.png` |
 | 9 | Opens verification UI for any unconfirmed miner name matches |
 | 10 | Opens UI to mark miners that belong to a set rack |
@@ -104,6 +121,7 @@ Final swap visualizations are written to `output/swaps_room*.png` (one file per 
 |---|---|
 | `data/placed_room*.json` | Rack-grouped miner data per room |
 | `data/inventory.json` | Merged inventory sorted by power |
+| `data/inventory_1cell.json` | *(optional)* 1-cell-only inventory, validated and sorted |
 | `data/optimizer_swaps.json` | Swap plan produced by the optimizer |
 | `data/locked.json` | List of miners marking set racks |
 | `data/set_groups.json` | Set bonus thresholds per rack |

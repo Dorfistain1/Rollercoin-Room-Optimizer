@@ -87,6 +87,20 @@ def _run_downloads(label: str, tasks: list, fetch_fn, desc_fn=None) -> None:
     class _Redirect:
         """Intercepts scraper print() calls; feeds last line to stat bar."""
         _buf = ""
+        _lines: list[str] = []
+        _head: str = ""
+
+        def set_head(self, h: str | None):
+            self._head = (h or "")[:60]
+            # refresh to show new head even if no sub-lines yet
+            if not self._lines:
+                stat.set_description_str(self._head, refresh=True)
+
+        def clear(self):
+            self._buf = ""
+            self._lines.clear()
+            self._head = ""
+            stat.set_description_str("", refresh=True)
 
         def write(self, s):
             self._buf += s
@@ -94,7 +108,13 @@ def _run_downloads(label: str, tasks: list, fetch_fn, desc_fn=None) -> None:
                 line, self._buf = self._buf.split("\n", 1)
                 clean = line.strip()
                 if clean:
-                    stat.set_description_str(clean[:120], refresh=True)
+                    # accumulate sub-steps for the current task
+                    self._lines.append(clean)
+                    # keep only the last few to avoid overflow
+                    recent = self._lines[-6:]
+                    # Single-line in-place description so old content is replaced
+                    combined = (self._head + " — " if self._head else "") + " | ".join(recent)
+                    stat.set_description_str(combined[:120], refresh=True)
             return len(s)
 
         def flush(self):
@@ -102,13 +122,15 @@ def _run_downloads(label: str, tasks: list, fetch_fn, desc_fn=None) -> None:
 
     rd = _Redirect()
     for task in tasks:
-        if desc_fn:
-            stat.set_description_str(desc_fn(task), refresh=True)
+        head = desc_fn(task) if desc_fn else ""
+        rd.set_head(head)
         sys.stdout = rd
         try:
             fetch_fn(task)
         finally:
             sys.stdout = _orig
+            # clear any accumulated sub-lines for the next task
+            rd.clear()
         prog.update(1)
 
     stat.close()
@@ -177,6 +199,19 @@ def _is_sorted_inventory(soup) -> bool:
     return False
 
 
+def _is_forced_1cell_inventory(path: Path) -> bool:
+    """Return True if the filename signals a 1-cell-only inventory capture.
+
+    Naming convention:
+      power1cell.html  / power1cell1.html  / power1cell2.html  …  (sorted by power)
+      bonus1cell.html  / bonus1cell1.html  / bonus1cell2.html  …  (sorted by bonus)
+
+    These files contain ONLY 1-cell miners and the pipeline validates that
+    every parsed entry is actually a 1-cell miner.
+    """
+    return bool(re.fullmatch(r"(power|bonus)1cell\d*", path.stem, re.IGNORECASE))
+
+
 def _is_forced_inventory(path: Path) -> bool:
     """Return True if the filename stem signals an inventory capture.
 
@@ -184,6 +219,9 @@ def _is_forced_inventory(path: Path) -> bool:
     (case-insensitive) are always treated as inventory pages regardless of
     their placed-miner content.  This lets the user handle the edge case
     of two rooms with identical miner layouts.
+
+    NOTE: 1-cell inventory files (power1cell*, bonus1cell*) are handled
+    separately by _is_forced_1cell_inventory and are NOT matched here.
     """
     return bool(re.fullmatch(r"(power|bonus)\d*", path.stem, re.IGNORECASE))
 
@@ -191,6 +229,7 @@ def _is_forced_inventory(path: Path) -> bool:
 def classify_pages(paths: list[Path], miners_index: dict) -> tuple[
     list[tuple[int, Path]],   # [(room_num, path), ...]
     list[Path],               # inventory pages
+    list[Path],               # 1-cell-only inventory pages
 ]:
     """
     Split HTML files into room pages and inventory pages.
@@ -209,9 +248,16 @@ def classify_pages(paths: list[Path], miners_index: dict) -> tuple[
     seen: dict[frozenset, tuple[int, Path]] = {}   # fingerprint -> (room_num, path)
     room_pages: list[tuple[int, Path]] = []
     inv_pages: list[Path] = []
+    inv_1cell_pages: list[Path] = []
     room_num = 1
 
     for path in paths:
+        if _is_forced_1cell_inventory(path):
+            sort_by = "power" if path.stem.lower().startswith("power") else "bonus"
+            print(f"  [1-cell Inventory/{sort_by}] {path.name}  (filename convention)")
+            inv_1cell_pages.append(path)
+            continue
+
         if _is_forced_inventory(path):
             print(f"  [Inventory] {path.name}  (filename convention)")
             inv_pages.append(path)
@@ -256,7 +302,7 @@ def classify_pages(paths: list[Path], miners_index: dict) -> tuple[
             room_num += 1
 
     room_pages.sort(key=lambda x: x[0])   # restore sequential order after any swaps
-    return room_pages, inv_pages
+    return room_pages, inv_pages, inv_1cell_pages
 
 
 def build_inventory_output(
@@ -301,8 +347,8 @@ def main() -> None:
     # ── Phase 1: classify pages ───────────────────────────────────────────
     print("=== Phase 1: classifying pages ===")
     miners_index = load_miners_index()
-    room_pages, inv_pages = classify_pages(all_paths, miners_index)
-    print(f"\n  {len(room_pages)} room(s), {len(inv_pages)} inventory page(s)\n")
+    room_pages, inv_pages, inv_1cell_pages = classify_pages(all_paths, miners_index)
+    print(f"\n  {len(room_pages)} room(s), {len(inv_pages)} inventory page(s), {len(inv_1cell_pages)} 1-cell inventory page(s)\n")
 
     if not room_pages:
         print("No room pages found — nothing to do.")
@@ -390,8 +436,8 @@ def main() -> None:
             print(f"=== Phase 6: downloading {len(inv_names_to_fetch)} inventory-only miner(s) ===")
             _run_downloads(
                 label="Downloading",
-                tasks=sorted(inv_names_to_fetch),
-                fetch_fn=lambda name: lookup_miner(name, expected_name=name),
+                    tasks=sorted(inv_names_to_fetch),
+                    fetch_fn=lambda name: lookup_miner(name, expected_name=name, wait_on_retry=True),
                 desc_fn=lambda name: name,
             )
             print()  # blank line after bars clear
@@ -411,6 +457,69 @@ def main() -> None:
     else:
         print("=== Phase 5–7: no inventory pages found, skipping ===\n")
 
+    # ── Phase 7b: process 1-cell-only inventory pages ────────────────────
+    if inv_1cell_pages:
+        print("=== Phase 7b: processing 1-cell inventory pages ===")
+        merged_1cell: dict[str, dict] = {}
+        for path in inv_1cell_pages:
+            soup = BeautifulSoup(path.read_bytes(), "lxml")
+            # Re-load miners_index with the freshest data available
+            fresh_index = load_miners_index()
+            batch = parse_inventory(soup, fresh_index)
+            if not batch:
+                print(f"  {path.name}: no inventory modal found")
+                continue
+            total_cards = sum(v["count"] for v in batch.values())
+            print(f"  {path.name}: {total_cards} cards ({len(batch)} unique)")
+
+            # Validate: every miner should be 1-cell
+            bad: list[str] = []
+            for data in batch.values():
+                name = data["name"]
+                # Look up cells from miners_data
+                db_entry = fresh_index.get(name)
+                if db_entry is None:
+                    # Try case-insensitive fallback
+                    db_entry = next(
+                        (v for k, v in fresh_index.items() if k.lower() == name.lower()),
+                        None,
+                    )
+                cells = (db_entry or {}).get("cells")
+                if cells is not None and cells != 1:
+                    bad.append(f"{name} (cells={cells})")
+            if bad:
+                print(f"  [!] WARNING: {len(bad)} non-1-cell miner(s) found in '{path.name}':")
+                for b in bad:
+                    print(f"       - {b}")
+                print(f"  [!] These will still be included but you should check your save.")
+
+            for key, data in batch.items():
+                if key not in merged_1cell:
+                    merged_1cell[key] = dict(data)
+                else:
+                    merged_1cell[key]["count"] = max(merged_1cell[key]["count"], data["count"])
+                    if merged_1cell[key]["power_th"] is None and data["power_th"] is not None:
+                        merged_1cell[key]["power_th"] = data["power_th"]
+                    if merged_1cell[key]["bonus_pct"] is None and data["bonus_pct"] is not None:
+                        merged_1cell[key]["bonus_pct"] = data["bonus_pct"]
+
+        if merged_1cell:
+            # Determine primary sort from first file's stem
+            sort_key = "bonus" if inv_1cell_pages[0].stem.lower().startswith("bonus") else "power"
+            inv_1cell_output = build_inventory_output(merged_1cell, [p.name for p in inv_1cell_pages])
+            # Add a metadata flag so consumers know it was validated as 1-cell
+            inv_1cell_output["sort_hint"] = sort_key
+            inv_1cell_output["cells_filter"] = 1
+
+            inv_1cell_path = OUT_DIR / "inventory_1cell.json"
+            inv_1cell_path.write_text(
+                json.dumps(inv_1cell_output, indent=2, ensure_ascii=False), encoding="utf-8"
+            )
+            print(f"  Saved -> {inv_1cell_path}")
+            print(f"  {inv_1cell_output['total_miners']} total 1-cell cards, "
+                  f"{inv_1cell_output['unique_miners']} unique miners\n")
+    else:
+        print("=== Phase 7b: no 1-cell inventory pages found, skipping ===\n")
     # ── Phase 8: render rooms ─────────────────────────────────────────────
     print("=== Phase 8: rendering rooms ===")
     VIS_DIR.mkdir(exist_ok=True)
