@@ -26,6 +26,7 @@ Flow:
 import json
 import re
 import sys
+import argparse
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -330,6 +331,14 @@ def build_inventory_output(
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main() -> None:
+    # ── Parse flags ───────────────────────────────────────────────────────
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--max", dest="use_max", action="store_true",
+                        help="Cap optimised power at a user-specified league boundary.")
+    parser.add_argument("--min", dest="use_min", action="store_true",
+                        help="Only show output if the target minimum power can be reached.")
+    args, _ = parser.parse_known_args()
+
     # Ensure required directories exist (fresh installs from zip won't have them)
     HTML_DIR.mkdir(parents=True, exist_ok=True)
     OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -555,7 +564,7 @@ def main() -> None:
     # ── Phase 11: run optimizer ───────────────────────────────────────────
     print("\n=== Phase 11: running optimizer ===")
     import optimizer as _opt
-    _opt.main()
+    _opt.main(use_max=args.use_max, use_min=args.use_min)
 
     # ── Phase 12: visualise swaps ───────────────────────────────────────
     _swaps_path = OUT_DIR / "optimizer_swaps.json"

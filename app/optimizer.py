@@ -159,7 +159,7 @@ def load_set_bonus() -> float:
 
 def save_set_bonus(offset_pct: float) -> None:
     SET_BONUS_JSON.write_text(
-        json.dumps({"set_bonus_pct": round(offset_pct, 4)}, indent=2),
+        json.dumps({"set_bonus_pct": round(offset_pct, 2)}, indent=2),
         encoding="utf-8",
     )
 
@@ -471,6 +471,9 @@ def find_best_swap(placed: list[Miner],
                    rooms: list[dict],
                    miners_db: dict[str, dict],
                    set_groups: list[dict] | None = None,
+                   power_cap_adj: float | None = None,
+                   current_adj: float = 0.0,
+                   set_bonus_pct: float = 0.0,
                    ) -> tuple[float, list[Miner], list[dict]] | None:
     """
     Find the single best swap that improves effective power.
@@ -485,6 +488,11 @@ def find_best_swap(placed: list[Miner],
       E. single 1-cell placed  →  1× 1-cell inventory  (leaves a free cell;
            paired with another rack's free-cell if available, else fill with
            best 1-cell from inventory)
+
+    power_cap_adj: if set, only consider swaps where the resulting adjusted
+                   effective power does not exceed this value.
+    current_adj:   the current adjusted effective power (used with power_cap_adj).
+    set_bonus_pct: manual set-bonus offset % applied to adjusted power.
     """
     best_delta = 0.0
     best_remove: list[Miner] = []
@@ -541,6 +549,10 @@ def find_best_swap(placed: list[Miner],
                     [cand["rarity"]],
                     set_groups=set_groups,
                 )
+                if power_cap_adj is not None:
+                    _draw = cand["power_th"] - placed_miner.power_th
+                    if current_adj + delta + _draw * set_bonus_pct / 100.0 > power_cap_adj:
+                        continue
                 if delta > best_delta:
                     best_delta = delta
                     best_remove = [placed_miner]
@@ -563,6 +575,10 @@ def find_best_swap(placed: list[Miner],
                         [c1["rarity"], c2["rarity"]],
                         set_groups=set_groups,
                     )
+                    if power_cap_adj is not None:
+                        _draw = c1["power_th"] + c2["power_th"] - placed_miner.power_th
+                        if current_adj + delta + _draw * set_bonus_pct / 100.0 > power_cap_adj:
+                            continue
                     if delta > best_delta:
                         best_delta = delta
                         best_remove = [placed_miner]
@@ -593,6 +609,10 @@ def find_best_swap(placed: list[Miner],
                             [cand["rarity"]],
                             set_groups=set_groups,
                         )
+                        if power_cap_adj is not None:
+                            _draw = cand["power_th"] - sum(sm.power_th for sm in pair)
+                            if current_adj + delta + _draw * set_bonus_pct / 100.0 > power_cap_adj:
+                                continue
                         if delta > best_delta:
                             best_delta = delta
                             best_remove = list(pair)
@@ -617,6 +637,11 @@ def find_best_swap(placed: list[Miner],
                                 [c1["rarity"], c2["rarity"]],
                                 set_groups=set_groups,
                             )
+                            if power_cap_adj is not None:
+                                _draw = (c1["power_th"] + c2["power_th"]
+                                         - sum(sm.power_th for sm in pair))
+                                if current_adj + delta + _draw * set_bonus_pct / 100.0 > power_cap_adj:
+                                    continue
                             if delta > best_delta:
                                 best_delta = delta
                                 best_remove = list(pair)
@@ -639,6 +664,10 @@ def find_best_swap(placed: list[Miner],
                         [cand["rarity"]],
                         set_groups=set_groups,
                     )
+                    if power_cap_adj is not None:
+                        _draw = cand["power_th"] - target.power_th
+                        if current_adj + delta + _draw * set_bonus_pct / 100.0 > power_cap_adj:
+                            continue
                     if delta > best_delta:
                         best_delta = delta
                         best_remove = [target]
@@ -769,7 +798,13 @@ def compute_swaps(
 # Main
 # ---------------------------------------------------------------------------
 
-def main(dry_run: bool = False) -> None:
+def main(dry_run: bool = False, use_max: bool = False, use_min: bool = False) -> None:
+    # Remove any stale swap plan from a previous run so Phase 12 only fires
+    # when this run actually produces swaps.
+    _swaps_path = _ROOT / "data/optimizer_swaps.json"
+    if _swaps_path.exists():
+        _swaps_path.unlink()
+
     print("Loading data...")
     miners_db  = load_miners_data()
     inv_list   = load_inventory()
@@ -835,7 +870,12 @@ def main(dry_run: bool = False) -> None:
             print(f"  Set pct bonus : {set_pct_0:>12.2f} %")
         if set_raw_0:
             print(f"  Set raw bonus : {set_raw_0:>12,.1f} Th/s")
-    print(f"  Effective     : {eff0:>12,.1f} Th/s")
+    # Recompute effective from the exact components we show so printed
+    # "Computed bonus" matches the value used to calculate the displayed
+    # effective power (avoids small-formatting mismatch).
+    computed_bonus0 = bonus0 + set_pct_0
+    eff0_display = raw0 * (1.0 + computed_bonus0 / 100.0) + set_raw_0
+    print(f"  Effective     : {eff0_display:>12,.1f} Th/s")
 
     set_bonus = _prompt_set_bonus(raw0, bonus0 + set_pct_0, set_bonus)
     adj_total_pct0 = bonus0 + set_pct_0 + set_bonus
@@ -844,17 +884,105 @@ def main(dry_run: bool = False) -> None:
         print(f"  Adj total pct : {adj_total_pct0:>10.2f} %  "
               f"(manual offset: {set_bonus:+.2f}%)")
         print(f"  Adjusted eff  : {adj0:>12,.1f} Th/s")
-    print(f"\nInventory      : {sum(e['count'] for e in inv_pool.values())} miners "
+    print()
+
+    # If running in --max mode, ask the user for the current effective power
+    # shown in-game.  This may include temporary/external sources (rack power,
+    # games, etc.).  We treat the difference between the reported value and our
+    # calculated adjusted effective as a fixed external offset when aiming for
+    # the --max cap: swaps are still evaluated using the calculated internal
+    # effective values, but the target cap used by the optimizer is reduced by
+    # this offset so the overall in-game total remains within the user's limit.
+    reported_eff: float | None = None
+    external_offset: float = 0.0
+    if use_max:
+        print("  Since --max was requested, enter the CURRENT effective power shown in-game (Th/s).")
+        print("  This may include temporary/extra sources (rack power, games).")
+        raw_reported = input("  Reported effective > ").strip().replace(",", ".").replace(" ", "").rstrip("Tt")
+        if raw_reported:
+            try:
+                reported_eff = float(raw_reported)
+                external_offset = reported_eff - adj0
+                if abs(external_offset) > 0.01:
+                    print(f"  Note: reported effective differs from calculated adjusted effective by {external_offset:+,.1f} Th/s.")
+                    print("  The optimizer will treat this difference as a fixed external offset when aiming for --max;")
+                    print("  swaps will still be evaluated using the calculated internal effective power.")
+            except ValueError:
+                print("  [!] Invalid number — ignoring reported effective.")
+
+    print(f"Inventory      : {sum(e['count'] for e in inv_pool.values())} miners "
           f"({len(inv_pool)} unique)\n")
 
-    # Greedy optimisation loop
+    # ── Power target prompts (--max / --min flags) ────────────────────────
+    power_cap: float | None = None
+    power_floor: float | None = None
+
+    if use_min:
+        print("  Enter the MINIMUM power you need to reach (Th/s, same unit as above).")
+        print("  If no configuration can achieve this, no output will be shown.")
+        raw_min = input("  Min > ").strip().replace(",", ".").replace(" ", "").rstrip("Tt")
+        if raw_min:
+            try:
+                power_floor = float(raw_min)
+            except ValueError:
+                print("  [!] Invalid number — --min constraint ignored.")
+
+    if use_max:
+        print("  Enter the MAXIMUM power you want to achieve (Th/s, same unit as above).")
+        print("  The optimizer will get as close as possible without going over.")
+        raw_max = input("  Max > ").strip().replace(",", ".").replace(" ", "").rstrip("Tt")
+        if raw_max:
+            try:
+                power_cap = float(raw_max)
+            except ValueError:
+                print("  [!] Invalid number — --max constraint ignored.")
+
+    # Compute the optimizer's internal cap target. If the user supplied a
+    # reported effective power earlier, treat the difference between that and
+    # our calculated adjusted effective as a fixed external offset: the
+    # optimizer will aim at `power_cap_adj = power_cap - external_offset`.
+    power_cap_adj: float | None = None
+    if power_cap is not None:
+        if external_offset:
+            power_cap_adj = power_cap - external_offset
+            print(f"  Adjusted optimizer max target: {power_cap_adj:,.1f} Th/s "
+                  f"(original {power_cap:,.1f} minus reported delta {external_offset:+.1f})")
+        else:
+            power_cap_adj = power_cap
+
+    if power_floor is not None and power_cap is not None:
+        if power_floor > power_cap:
+            print(f"\n  [!] --min ({power_floor:,.1f}) is greater than --max ({power_cap:,.1f}) — aborting.")
+            return
+        if power_floor == power_cap:
+            print(f"  [!] --min and --max are equal — the optimizer will target exactly {power_cap:,.1f} Th/s.")
+
+    if power_cap is not None and adj0 > power_cap:
+        print(f"\n  [!] Current power ({adj0:,.1f} Th/s) already exceeds the --max cap "
+              f"({power_cap:,.1f} Th/s).")
+        print("  The optimizer cannot reduce power. No swaps will be suggested.")
+        if power_floor is not None and adj0 >= power_floor:
+            print(f"  Current configuration already satisfies the range "
+                  f"[{power_floor:,.1f}, {power_cap:,.1f}] Th/s.")
+        return
+
+
     placed = list(original_placed)
     iteration = 0
+    current_adj = adj0
 
     while True:
-        result = find_best_swap(placed, inv_pool, rooms, miners_db, set_groups)
+        result = find_best_swap(placed, inv_pool, rooms, miners_db, set_groups,
+                    power_cap_adj=power_cap_adj,
+                    current_adj=current_adj,
+                    set_bonus_pct=set_bonus)
         if result is None:
-            print("No further improvements found.")
+            if power_cap is not None and iteration > 0:
+                print("No further improvements found within the power cap.")
+            elif iteration == 0:
+                pass  # handled below
+            else:
+                print("No further improvements found.")
             break
         delta, remove, add_entries = result
         add_names = ", ".join(e["name"] for e in add_entries)
@@ -862,10 +990,19 @@ def main(dry_run: bool = False) -> None:
         print(f"  Swap {iteration+1}: remove [{rem_names}]  +{delta:,.1f} Th/s")
         print(f"           add    [{add_names}]")
         placed = apply_swap(placed, inv_pool, remove, add_entries, miners_db)
+        # Update current adjusted power for cap tracking
+        _raw_c, _bon_c, _ = total_power(placed, set_groups)
+        _spc, _sre = (set_group_bonus([m.name.lower() for m in placed], set_groups)
+                      if set_groups else (0.0, 0.0))
+        current_adj = _raw_c * (1.0 + (_bon_c + _spc + set_bonus) / 100.0) + _sre
         iteration += 1
 
     if iteration == 0:
         print("Room is already optimal given available inventory.")
+        if power_floor is not None and adj0 < power_floor:
+            print(f"\n  No configuration found that reaches the minimum power of "
+                  f"{power_floor:,.1f} Th/s.")
+            print(f"  Best achievable (current): {adj0:,.1f} Th/s")
         return
 
     raw1, bonus1, eff1 = total_power(placed, set_groups)
@@ -876,6 +1013,16 @@ def main(dry_run: bool = False) -> None:
     )
     adj_total_pct1 = bonus1 + set_pct_1 + set_bonus
     adj1 = raw1 * (1.0 + adj_total_pct1 / 100.0) + set_raw_1
+
+    # ── --min floor check ─────────────────────────────────────────────────
+    if power_floor is not None and adj1 < power_floor:
+        cap_msg = (f" within the cap of {power_cap:,.1f} Th/s"
+                   if power_cap is not None else "")
+        print(f"\n  No configuration found{cap_msg} that reaches the minimum power "
+              f"of {power_floor:,.1f} Th/s.")
+        print(f"  Best achievable: {adj1:,.1f} Th/s")
+        return
+
     gain_str     = f"+{gain:,.1f}"         if gain >= 0 else f"{gain:,.1f}"
     adj_gain_str = f"+{adj1 - adj0:,.1f}"  if adj1 >= adj0 else f"{adj1 - adj0:,.1f}"
     print(f"\nOptimised state:")
@@ -886,6 +1033,16 @@ def main(dry_run: bool = False) -> None:
         print(f"  Adj total pct : {adj_total_pct1:>10.2f} %  "
               f"(was {adj_total_pct0:.2f}%, manual offset: {set_bonus:+.2f}%)")
         print(f"  Adj effective : {adj1:>12,.1f} Th/s  ({adj_gain_str})")
+        if use_max and 'reported_eff' in locals() and reported_eff is not None:
+            # Compute actual effective values including the external offset the
+            # user reported. Show the optimizer's adjusted effective plus that
+            # offset, and the delta relative to the initial actual adjusted.
+            actual_adj0 = adj0 + external_offset
+            actual_adj1 = adj1 + external_offset
+            actual_gain = actual_adj1 - actual_adj0
+            actual_gain_str = f"+{actual_gain:,.1f}" if actual_gain >= 0 else f"{actual_gain:,.1f}"
+            print(f"  Actual effective: {actual_adj1:>12,.1f} Th/s  ({actual_gain_str})")
+            print(f"  (Reported includes external offset {external_offset:+,.1f} Th/s)")
 
     # Collapse chains → minimal physical swaps
     swaps = compute_swaps(original_placed, placed, set_groups)
@@ -901,13 +1058,12 @@ def main(dry_run: bool = False) -> None:
         print(f"    Gain   : {d_str} Th/s")
 
     # Save swap plan for the visualiser
-    swaps_path = _ROOT / "data/optimizer_swaps.json"
-    swaps_path.write_text(
+    _swaps_path.write_text(
         json.dumps(swaps, indent=2, ensure_ascii=False), encoding="utf-8"
     )
-    print(f"\nSwap plan saved → {swaps_path}")
+    print(f"\nSwap plan saved → {_swaps_path}")
 
 
 if __name__ == "__main__":
     dry = "--dry-run" in sys.argv
-    main(dry_run=dry)
+    main(dry_run=dry, use_max="--max" in sys.argv, use_min="--min" in sys.argv)

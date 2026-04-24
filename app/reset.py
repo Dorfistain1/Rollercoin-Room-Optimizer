@@ -24,17 +24,8 @@ _ROOT = Path(__file__).parent.parent   # roomBuilder/
 # ── What gets deleted ─────────────────────────────────────────────────────────
 
 # Individual files in data/ (not the directory itself)
-_DATA_FILES = [
-    _ROOT / "data/inventory.json",
-    _ROOT / "data/locked.json",
-    _ROOT / "data/match_log.json",
-    _ROOT / "data/optimizer_swaps.json",
-    _ROOT / "data/set_bonus.json",
-    _ROOT / "data/set_groups.json",
-]
-_DATA_GLOB_PATTERNS = [
-    ("data", "placed_room*.json"),
-]
+# Clear the entire contents of data/ (keep the data/ directory itself)
+_DATA_DIR = _ROOT / "data"
 
 # Directories whose entire CONTENTS are cleared (dirs kept so git tracks them)
 _CLEAR_DIRS = [
@@ -84,18 +75,11 @@ def main() -> None:
 
     total_removed = 0
 
-    # ── data/ individual files ────────────────────────────────────────────
-    for p in _DATA_FILES:
-        if _remove_file(p):
-            print(f"  Deleted  {p.relative_to(_ROOT)}")
-            total_removed += 1
-
-    # ── data/ glob patterns ───────────────────────────────────────────────
-    for folder, pattern in _DATA_GLOB_PATTERNS:
-        for p in sorted((_ROOT / folder).glob(pattern)):
-            if _remove_file(p):
-                print(f"  Deleted  {p.relative_to(_ROOT)}")
-                total_removed += 1
+    # ── data/ contents (clear everything inside data/) ────────────────────
+    n = _clear_dir_contents(_DATA_DIR)
+    if n:
+        print(f"  Cleared  {_DATA_DIR.relative_to(_ROOT)}/  ({n} item{'s' if n != 1 else ''})")
+        total_removed += n
 
     # ── vis/, output/, html_page/ ─────────────────────────────────────────
     for d in _CLEAR_DIRS:

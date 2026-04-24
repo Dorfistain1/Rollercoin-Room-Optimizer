@@ -93,6 +93,38 @@ This is **totally optional and usually not needed**. It can help in edge cases w
 python app/main.py
 ```
 
+#### Optional flags
+
+| Flag | Purpose |
+|---|---|
+| `--max` | After entering your current in-game bonus, you are also asked for a **maximum power target** (Th/s). The optimizer will only apply swaps that keep your total adjusted power at or below that value — useful for staying at the top of a league tier rather than overshooting into the next one. |
+| `--min` | You are asked for a **minimum power target** (Th/s). If even the fully-optimised configuration cannot reach that value, no swap output is shown and you get a "not reachable" message instead. |
+
+Both flags can be used together to define a target range. The optimizer will maximise power up to `--max` and then verify the result is at or above `--min`. If `--min > --max` the pipeline rejects the range and exits early.
+
+**Example — stay in your current league:**
+
+```bash
+python app/main.py --max
+# Prompts: "Max > 850000"  (e.g., league top is 850 000 Th/s)
+```
+
+**Example — check if a league tier is reachable:**
+
+```bash
+python app/main.py --min
+# Prompts: "Min > 500000"  (e.g., need 500 000 Th/s to enter a league)
+```
+
+**Example — target a specific range:**
+
+```bash
+python app/main.py --min --max
+# Prompts: "Min > 700000"  then  "Max > 850000"
+```
+
+> The power values you enter must use the **same unit** shown by the optimizer (the `Th/s` column printed before the swap plan). This is the *adjusted* effective power that already includes your manual set-bonus offset.
+
 The pipeline runs automatically:
 
 | Phase | What happens |
