@@ -9,6 +9,7 @@ Scrapes your [RollerCoin](https://rollercoin.com/?r=kyaf3h0b) rooms from saved H
 | `app/scrape_miners.py` | Fetches miner data and images from [minaryganar.com](https://minaryganar.com). |
 | `app/visualize_room.py` | Renders rack JSON into PNG images. |
 | `app/optimizer.py` | Greedy optimizer — finds the best inventory swaps to maximise power. |
+| `app/merge_planner.py` | Merge planner — finds optimal merges within an RLT budget and combines the result with the swap plan. |
 | `app/vis_swaps.py` | Renders the swap plan as an annotated room image. |
 | `app/select_locked.py` | UI to mark miners as belonging to a set rack (used by the set-group step). |
 | `app/select_sets.py` | UI to define set bonus thresholds for each locked rack. |
@@ -99,6 +100,7 @@ python app/main.py
 |---|---|
 | `--max` | After entering your current in-game bonus, you are also asked for a **maximum power target** (Th/s). The optimizer will only apply swaps that keep your total adjusted power at or below that value — useful for staying at the top of a league tier rather than overshooting into the next one. |
 | `--min` | You are asked for a **minimum power target** (Th/s). If even the fully-optimised configuration cannot reach that value, no swap output is shown and you get a "not reachable" message instead. |
+| `--merge <RLT>` | Enable **merge planning** with the given RLT budget. Finds the best miner merges you can afford, then runs the optimizer on the resulting post-merge state. Requires `parts.html` in `html_page/` (see [Merge planning](#merge-planning) below). |
 
 Both flags can be used together to define a target range. The optimizer will maximise power up to `--max` and then verify the result is at or above `--min`. If `--min > --max` the pipeline rejects the range and exits early.
 
@@ -139,7 +141,7 @@ The pipeline runs automatically:
 | 9 | Opens verification UI for any unconfirmed miner name matches |
 | 10 | Opens UI to mark miners that belong to a set rack |
 | 10.5 | Opens UI to define set bonus thresholds for each locked rack |
-| 11 | Runs the optimizer, prints the swap plan, saves `data/optimizer_swaps.json` |
+| 11 | Runs the optimizer (or merge planner if `--merge` was given), saves swap plan |
 | 12 | Renders swap plan → `output/swaps_room*.png` (skipped if no swaps found) |
 | 13 | Cleans up `_files/` folders left by the browser in `html_page/` |
 
@@ -158,8 +160,12 @@ Final swap visualizations are written to `output/swaps_room*.png` (one file per 
 | `data/locked.json` | List of miners marking set racks |
 | `data/set_groups.json` | Set bonus thresholds per rack |
 | `data/match_log.json` | Verified miner name mappings |
+| `data/merge_plan.json` | *(--merge)* Combined merge steps + swap plan |
+| `data/merge_costs.json` | *(--merge)* Cached API merge costs per miner |
+| `data/parts.json` | *(--merge)* Parsed owned-parts counts |
 | `vis/room*.png` | Rendered room visualizations |
 | `output/swaps_room*.png` | Swap plan visualizations |
+| `output/merge_steps.png` | *(--merge)* Visual merge step chart |
 | `miners/<Name>.<ext>` | Downloaded miner images |
 | `miners/miners_data.json` | Miner stats (power / bonus per rarity) |
 
@@ -178,6 +184,49 @@ After showing the current state the optimizer asks for the actual total bonus % 
 ### Set groups
 
 Miners marked in Phase 10 are treated as potential set members, not as hard-locked miners. The optimizer is free to swap them out if they don't justify their slots individually. Phase 10.5 lets you define per-rack thresholds: e.g. "if ≥ 4 members are placed, add +15% bonus". The optimizer uses these thresholds when scoring swaps so it keeps the set together when the bonus outweighs the individual power cost.
+
+---
+
+## Merge planning
+
+Merging two identical miners (same name + rarity) in-game produces one miner of the next rarity tier. The merge fee (RLT) and parts required vary per miner and are fetched automatically from minaryganar.com.
+
+### 1 — Save your parts inventory page
+
+1. Open `https://rollercoin.com/storage` in your browser.
+2. Press `Ctrl+S` to save the page as HTML.
+3. Save it into `html_page/` as `parts.html` (or any filename — the pipeline detects it by content).
+
+### 2 — Run with a budget
+
+```bash
+python app/main.py --merge 15.0
+# Prompts: efficiency threshold  (Th/s gained per RLT spent)
+#          then set-bonus offset (same as normal run)
+```
+
+The pipeline will:
+
+1. Parse your owned parts from `parts.html`.
+2. Fetch merge costs from minaryganar.com for every miner that has 2+ copies across your rooms and inventory.
+3. Show the efficiency distribution and ask for a minimum threshold — merges below it are skipped.
+4. Greedily select the best merges within your RLT and parts budget.
+5. Run the optimizer on the simulated post-merge state.
+6. Print and save a combined **merge + placement plan**.
+
+### Output
+
+| Path | Description |
+|---|---|
+| `data/merge_plan.json` | Full plan: merge steps + optimizer swaps |
+| `data/merge_costs.json` | Cached API merge costs (reused on subsequent runs) |
+| `data/parts.json` | Parsed owned-parts counts |
+| `output/merge_steps.png` | Visual chart of each merge step with costs and power gains |
+| `output/swaps_room*.png` | Placement plan (swaps that require a prior merge are labelled `[MERGE FIRST ⚡]`) |
+
+### Chain merging
+
+The planner handles chain merges automatically. If merging two uncommon miners produces a rare, and you already have another rare of the same type, the planner can then merge the two rares into an epic — all within the same budget run. Chain dependencies are shown in the output and linked in `merge_plan.json` via `depends_on_step`.
 
 ---
 

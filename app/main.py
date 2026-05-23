@@ -337,6 +337,9 @@ def main() -> None:
                         help="Cap optimised power at a user-specified league boundary.")
     parser.add_argument("--min", dest="use_min", action="store_true",
                         help="Only show output if the target minimum power can be reached.")
+    parser.add_argument("--merge", dest="merge_budget", type=float, default=None,
+                        metavar="RLT",
+                        help="RLT budget for merge planning. Requires parts.html in html_page/.")
     args, _ = parser.parse_known_args()
 
     # Ensure required directories exist (fresh installs from zip won't have them)
@@ -561,10 +564,34 @@ def main() -> None:
     import select_sets as _ss
     _ss.main()
 
-    # ── Phase 11: run optimizer ───────────────────────────────────────────
-    print("\n=== Phase 11: running optimizer ===")
-    import optimizer as _opt
-    _opt.main(use_max=args.use_max, use_min=args.use_min)
+    # ── Phase 11: run optimizer (or merge planner) ───────────────────────
+    if args.merge_budget is not None:
+        print(f"\n=== Phase 11: merge planning (budget: {args.merge_budget:.3f} RLT) ===")
+        import merge_planner as _mp
+        import optimizer as _opt_m
+        _rooms    = _opt_m.load_all_rooms()
+        _inv_list = _opt_m.load_inventory()
+        _mdb      = _opt_m.load_miners_data()
+        _locked   = _opt_m.load_locked()
+        _sgroups  = _opt_m.load_set_groups()
+        _merge_result = _mp.run_merge_planning(
+            html_dir=HTML_DIR,
+            rooms=_rooms,
+            inv_list=_inv_list,
+            miners_db=_mdb,
+            rlt_budget=args.merge_budget,
+            set_groups=_sgroups,
+            locked_set=_locked,
+        )
+        if _merge_result is None:
+            # Parts file missing or no candidates — fall back to normal optimizer
+            print("\n=== Phase 11 fallback: running normal optimizer ===")
+            import optimizer as _opt
+            _opt.main(use_max=args.use_max, use_min=args.use_min)
+    else:
+        print("\n=== Phase 11: running optimizer ===")
+        import optimizer as _opt
+        _opt.main(use_max=args.use_max, use_min=args.use_min)
 
     # ── Phase 12: visualise swaps ───────────────────────────────────────
     _swaps_path = OUT_DIR / "optimizer_swaps.json"
@@ -574,6 +601,22 @@ def main() -> None:
         _vs.main()
     else:
         print("\n=== Phase 12: skipped (no swaps to visualise) ===")
+
+    # ── Merge summary (printed after vis so it's the last thing the user sees) ──
+    if args.merge_budget is not None and _merge_result is not None:
+        _ms  = _merge_result.get("merge_steps", [])
+        _sw  = _merge_result.get("optimizer_swaps", [])
+        _cur = _merge_result.get("current_power_adj", 0.0)
+        _mg  = sum(s["net_power_gain_th"] for s in _ms)
+        _sg  = sum(s["delta_eff"] for s in _sw)
+        print(f"\n{'=' * 60}")
+        print(f"  FINAL TOTALS")
+        print(f"  Current power              : {_cur:>12,.1f} Th/s")
+        print(f"  Net merge gain (estimated) : +{_mg:>11,.1f} Th/s")
+        print(f"  Net swap gain              : +{_sg:>11,.1f} Th/s")
+        print(f"  {'─' * 42}")
+        print(f"  Estimated final power      : {_cur + _mg + _sg:>12,.1f} Th/s")
+        print(f"{'=' * 60}")
 
     # ── Phase 13: cleanup ─────────────────────────────────────────────────
     print()
