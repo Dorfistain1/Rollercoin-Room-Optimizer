@@ -32,6 +32,7 @@ _CLEAR_DIRS = [
     _ROOT / "vis",
     _ROOT / "output",
     _ROOT / "html_page",
+    _ROOT / "part_imgs",
 ]
 
 # Miners directory — only cleared when --keep-miners is NOT set

@@ -79,9 +79,35 @@ PARTS_JSON          = _ROOT / "data/parts.json"
 OPTIMIZER_SWAPS_JSON = _ROOT / "data/optimizer_swaps.json"
 OUTPUT_DIR          = _ROOT / "output"
 MINERS_DATA_PATH    = _ROOT / "miners/miners_data.json"
+PART_IMGS_DIR       = _ROOT / "part_imgs"
+
+_PARTS_IMAGE_BASE = "https://api.minaryganar.com/assets/rollercoin/parts"
 
 _RARITY_TO_LEVEL: dict[str, int] = {r: i + 1 for i, r in enumerate(RARITIES)}
 _LEVEL_TO_RARITY: dict[int, str] = {i + 1: r for i, r in enumerate(RARITIES)}
+
+
+# ── Part image helper ──────────────────────────────────────────────────────────
+
+def get_part_img(part_type: str, rarity: str) -> Path | None:
+    """
+    Return path to part image, downloading on demand if missing.
+    part_type: "fan" | "wire" | "hashboard"
+    rarity   : "common" | "uncommon" | "rare" | "epic" | "legendary"
+    Returns None if download fails.
+    """
+    PART_IMGS_DIR.mkdir(exist_ok=True)
+    filename = f"{part_type.lower()}_{rarity.lower()}.webp"
+    dest = PART_IMGS_DIR / filename
+    if dest.exists():
+        return dest
+    url  = f"{_PARTS_IMAGE_BASE}/{filename}"
+    resp = fetch_with_retry(url, retries=3, backoff=3.0, wait=True)
+    if resp is None:
+        print(f"  [!] Could not download part image: {filename}")
+        return None
+    dest.write_bytes(resp.content)
+    return dest
 
 
 # ── Part key helpers ───────────────────────────────────────────────────────────
@@ -711,8 +737,8 @@ _X_RESULT = _X_ARROW + _ARROW_W + _PAD
 _X_INFO   = _X_RESULT + _THUMB_W + _PAD
 _CANVAS_W = _X_INFO + _INFO_W + _PAD
 
-# Row height: thumb + badge + name + 3 text lines + bottom pad
-_ROW_H    = _THUMB_H + _BADGE_SZ + 6 + 13 + 13 + 13 + 14
+# Row height: thumb + name + 3 text lines + bottom pad (badge overlaid, not below)
+_ROW_H    = _THUMB_H + 4 + 13 + 13 + 13 + 14
 
 _BG       = (28, 30, 52)
 _FG       = (220, 220, 230)
@@ -755,11 +781,11 @@ def _draw_thumb_cell(
     font_name,
     extra_lines: list[tuple] | None = None,
 ) -> None:
-    """Paste thumb, badge below it, miner name below badge, then optional extra lines."""
+    """Paste thumb with badge overlaid top-left, miner name below, then optional extra lines."""
     canvas.paste(img, (x, y), img)
-    badge_y = y + _THUMB_H + 2
-    _paste_badge(canvas, rarity, x + (_THUMB_W - _BADGE_SZ) // 2, badge_y)
-    name_y = badge_y + _BADGE_SZ + 3
+    # Badge overlaid on top-left corner of the thumbnail
+    _paste_badge(canvas, rarity, x + 2, y + 2)
+    name_y = y + _THUMB_H + 4
     # Truncate long names so they don't overflow the column
     max_chars = _THUMB_W // 6
     display_name = name if len(name) <= max_chars else name[:max_chars - 1] + "…"
@@ -819,16 +845,38 @@ def render_merge_steps(merge_steps: list, miners_db: dict) -> None:
             ],
         )
 
-        # Info column: parts, efficiency, chain
+        # Info column: part images + qty, then efficiency, chain
+        _PART_SZ = 24
         ix = _X_INFO
         iy = y + 4
-        parts_lines = [
-            f"{p['type'].capitalize()} L{p['level']} × {p['qty']:,}"
-            for p in step["cost_parts"]
-        ] or ["No parts required"]
-        for pl in parts_lines:
-            draw.text((ix, iy), pl, fill=(180, 160, 100), font=font_sm)
-            iy += 13
+
+        if step["cost_parts"]:
+            for p in step["cost_parts"]:
+                part_rarity = RARITIES[p["level"] - 1]
+                img_path = get_part_img(p["type"], part_rarity)
+                if img_path is not None:
+                    try:
+                        pimg = Image.open(img_path).convert("RGBA").resize(
+                            (_PART_SZ, _PART_SZ), Image.LANCZOS
+                        )
+                        canvas.paste(pimg, (ix, iy), pimg)
+                    except Exception:
+                        pass
+                # Rarity badge — upper-right corner of the part thumbnail
+                pbadge = load_badge(part_rarity)
+                if pbadge:
+                    pbadge = pbadge.convert("RGBA").resize((12, 12), Image.LANCZOS)
+                    canvas.paste(pbadge, (ix + _PART_SZ - 12, iy), pbadge)
+                label = f"{p['type'].capitalize()} {part_rarity}  ×{p['qty']:,}"
+                draw.text(
+                    (ix + _PART_SZ + 4, iy + (_PART_SZ - 10) // 2),
+                    label, fill=(180, 160, 100), font=font_sm,
+                )
+                iy += _PART_SZ + 4
+        else:
+            draw.text((ix, iy), "No parts required", fill=(120, 120, 120), font=font_sm)
+            iy += 16
+
         draw.text((ix, iy), f"Eff: {step['efficiency_ratio']:,.1f} Th/s per RLT",
                   fill=(120, 200, 120), font=font_sm)
         iy += 13

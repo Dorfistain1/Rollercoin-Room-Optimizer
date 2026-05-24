@@ -11,6 +11,8 @@ output/!.gitkeep
 vis/*
 vis/!.gitkeep
 
+part_imgs/*
+
 # dev data
 /fullminerlist/
 /temp/
